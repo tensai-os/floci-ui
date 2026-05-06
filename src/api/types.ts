@@ -37,7 +37,7 @@ export interface ResourceSummary {
     name: string
     status?: string
     description?: string
-    metadata?: Record<string, string | number | undefined>
+    metadata?: Record<string, unknown>
 }
 
 export interface ServiceResourceSnapshot {

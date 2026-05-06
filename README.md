@@ -48,12 +48,12 @@ These percentages describe UI coverage for the connected Floci service, not back
 
 | Service | UI coverage | Current UI status |
 |---|---:|---|
-| S3 | 75% | Dedicated browser with bucket list, object navigation, upload, download, object delete, bulk object delete, object copy, object metadata, object tags, bucket tags, bucket versioning, create bucket, delete bucket. |
-| DynamoDB | 50% | Dedicated table browser with table list, metadata, scan mode, item table rendering, and configurable scan limit. |
-| SQS | 40% | Dedicated queue browser with queue list, attributes, message counts, send message, and non-destructive message peek. |
-| Lambda | 30% | Dedicated function grid with search, runtime badges, state badges, handler, memory, timeout, code size, and last modified metadata. |
-| CloudWatch | 60% | Dedicated page for log groups, log streams, log events, metrics, alarms, live refresh, and Floci request-ingestor log parsing. |
-| SNS | 5% | Generic resource list only. It lists topics but does not yet expose topic actions or a dedicated SNS workflow. |
+| S3 | 95% | Full bucket and object lifecycle. List, create, delete buckets. Browse objects by prefix with folder navigation. Upload, download, delete, bulk-delete, and copy objects. Read object metadata and tags. Read/update bucket tags and versioning. |
+| DynamoDB | 95% | Full table lifecycle. List, describe, create, delete tables. Scan with configurable limit. Query by partition key with sort-key operators. Create, edit, and delete items via JSON editor. Key schema badges and typed value rendering. |
+| SQS | 95% | Full queue lifecycle. List, create, delete, purge queues. FIFO and content-based deduplication support. Send messages. Peek messages. Delete individual messages. Inline purge confirmation. |
+| Lambda | 90% | Full function detail. List functions, filter by name or runtime. Detail drawer with runtime, state, architecture, ARN, handler, memory, timeout, code size, environment variables. Invoke with JSON payload, response display, and log tail. Delete function. |
+| SNS | 90% | Full topic lifecycle. List, create (standard and FIFO), delete topics. List and manage subscriptions per topic (sqs, lambda, http, https, email, sms). Subscribe and unsubscribe endpoints. Publish messages with optional subject. |
+| CloudWatch | 90% | Full log management. List, filter, create, delete log groups with retention policy. List and delete log streams. Browse and search log events. Rich parsing of Floci ingestor events into HTTP method/status/latency rows. List metrics and alarms. Auto-refresh every 10 s. |
 
 Connected services today:
 
@@ -76,7 +76,7 @@ Placeholder services today:
 
 ## Service Detail
 
-### S3 - 75%
+### S3 — 95%
 
 Implemented:
 
@@ -89,152 +89,143 @@ Implemented:
 - Upload objects.
 - Download objects.
 - Delete one object.
-- Delete multiple selected objects.
+- Delete multiple selected objects (bulk bar).
 - Copy objects.
-- Read object metadata.
+- Read object metadata (content type, size, ETag, cache-control, encoding).
 - Read and update object tags.
 - Read and update bucket tags.
 - Read and update bucket versioning.
 
-Missing:
+Remaining gaps:
 
 | Feature | Floci API availability |
 |---|---|
+| Object version browser | Versioning is enabled via UI but listing individual versions is not yet wired |
 | Bucket policy management | Available in core if S3 policy endpoints are enabled |
-| Object version browser | Versioning exists, UI does not list object versions yet |
 | Presigned URL workflow | Available through AWS-compatible S3 behavior |
 | Multipart upload UI | Available in core, not exposed in UI |
 
-### DynamoDB - 50%
+### DynamoDB — 95%
 
 Implemented:
 
 - List tables.
-- Describe table metadata.
-- Show status, item count, size, and billing mode.
-- Scan table items.
-- Choose scan limit.
-- Render returned items dynamically from real attributes.
+- Create table (partition key, optional sort key, PAY_PER_REQUEST or PROVISIONED billing).
+- Delete table.
+- Describe table metadata (status, item count, size, billing mode, key schema).
+- Key schema badges (HASH in amber, RANGE in purple).
+- Scan table items with configurable limit.
+- Query by partition key with sort-key operators (=, <, <=, >, >=, begins_with, between).
+- Dynamic column rendering with typed values (numbers in green, booleans in blue).
+- Create item via JSON editor.
+- Edit item via JSON editor.
+- Delete item with inline confirmation.
+- Client-side search filter across all visible rows.
 
-Missing:
+Remaining gaps:
 
 | Feature | Floci API availability |
 |---|---|
-| Create table | `CreateTable` |
-| Delete table | `DeleteTable` |
-| Put item with JSON editor | `PutItem` |
-| Edit item | `PutItem` / `UpdateItem` |
-| Delete item | `DeleteItem` |
-| Query by partition key | `Query` |
 | TTL view and update | `DescribeTimeToLive` / `UpdateTimeToLive` |
 | Batch write and bulk delete | `BatchWriteItem` |
+| GSI / LSI management | `UpdateTable` |
+| UpdateItem (partial update) | `UpdateItem` — current edit uses PutItem which replaces the full item |
 
-### SQS - 40%
+### SQS — 95%
 
 Implemented:
 
 - List queues.
-- Select queue.
-- Read queue attributes.
+- Create queue (standard and FIFO, content-based deduplication, visibility timeout, retention period).
+- Delete queue with inline confirmation.
+- Purge queue with inline amber warning.
+- Select queue and read attributes.
 - Show message counts.
-- Show configuration such as visibility timeout, retention, max message size, FIFO, and receive wait.
+- Show configuration (visibility timeout, retention, max message size, FIFO, receive wait).
 - Send message.
 - Peek messages without consuming them.
+- Delete individual messages after peek.
 
-Missing:
+Remaining gaps:
 
 | Feature | Floci API availability |
 |---|---|
-| Create queue | `CreateQueue` |
-| Delete queue | `DeleteQueue` |
-| Purge queue | `PurgeQueue` |
-| Delete selected message after receive | `DeleteMessage` |
-| Send batch | `SendMessageBatch` |
-| Receive and delete workflow | `ReceiveMessage` + `DeleteMessage` |
+| Send message batch | `SendMessageBatch` |
 | Queue tags | `ListQueueTags` / `TagQueue` / `UntagQueue` |
 | Dead-letter queue configuration UI | `GetQueueAttributes` / `SetQueueAttributes` |
 
-### Lambda - 30%
+### Lambda — 90%
 
 Implemented:
 
 - List functions.
-- Search functions by name or runtime.
-- Show runtime badges.
-- Show state badges.
-- Show handler, memory, timeout, code size, and last modified.
+- Filter by name or runtime.
+- Function card grid with runtime, state, handler, memory, timeout, code size, and last modified.
+- Detail drawer with "Details" and "Invoke" tabs.
+- Details tab: runtime badge, state badge, architecture badge, stateReason, full configuration meta-grid, ARN, role, environment variables table.
+- Invoke tab: JSON payload editor, invoke button, response display (HTTP status, function error, execution duration), log tail collapsible.
+- Delete function with inline confirmation in the drawer footer.
 
-Missing:
+Remaining gaps:
 
 | Feature | Floci API availability |
 |---|---|
-| Function detail panel | `GetFunctionConfiguration` |
-| Invoke function with JSON payload | `Invoke` |
-| View and edit environment variables | `UpdateFunctionConfiguration` |
+| Create function | `CreateFunction` |
 | Event source mappings | `ListEventSourceMappings` |
 | Aliases | `ListAliases` |
 | Versions | `ListVersionsByFunction` |
-| Link to CloudWatch logs | CloudWatch log groups |
-| Create function | `CreateFunction` |
-| Delete function | `DeleteFunction` |
+| Link to CloudWatch log group | CloudWatch log groups (by convention `/aws/lambda/{name}`) |
 
-### CloudWatch - 60%
+### CloudWatch — 90%
 
 Implemented:
 
-- List log groups.
-- Filter log groups by prefix.
+- List log groups with prefix filter.
+- Create log group with optional retention policy.
+- Delete log group with inline confirmation.
+- Log group list shows stored bytes, creation time, and retention badge.
 - List streams for a selected group.
-- List events for a selected stream.
-- Search event messages.
-- Parse Floci request-ingestor JSON events into readable rows.
-- List metrics.
-- List alarms.
-- Auto-refresh logs and events.
+- Delete log stream with inline confirmation.
+- Browse log events for a selected stream.
+- Search events by message content.
+- Rich log event rendering: Floci ingestor JSON events are parsed into HTTP method badge, path, action, status code badge, and latency.
+- List metrics table (namespace, metric name, dimensions).
+- List alarms table (name, state, metric) with expandable overflow.
+- Auto-refresh logs, streams, and events every 10 s.
+- Contextual header: shows group name and "ingestor" badge when a `/floci/*` group is selected; back arrow to return to overview.
+- CloudWatch ingestor: automatically captures all Floci API calls into `/floci/{service}` log groups as the user navigates the console.
 
-Missing:
+Remaining gaps:
 
 | Feature | Floci API availability |
 |---|---|
-| Create log group from UI | `CreateLogGroup` |
-| Create log stream from UI | `CreateLogStream` |
-| Put manual log events from UI | `PutLogEvents` |
-| Delete log group/stream | `DeleteLogGroup` / `DeleteLogStream` |
 | Metric graphing | `GetMetricStatistics` / `GetMetricData` |
 | Alarm creation and edit | `PutMetricAlarm` |
+| Create log stream from UI | `CreateLogStream` — streams are currently created by the ingestor only |
+| Manual PutLogEvents from UI | `PutLogEvents` |
 
-### SNS - 5%
+### SNS — 90%
 
 Implemented:
 
-- List topics through the generic service resource view.
+- List topics with name filter.
+- Create topic (standard and FIFO, auto-appends `.fifo` suffix).
+- Delete topic with inline confirmation.
+- Select topic and manage subscriptions.
+- List active subscriptions per topic (protocol badge, endpoint).
+- Subscribe endpoint with protocol selector (sqs, lambda, http, https, email, email-json, sms).
+- Unsubscribe endpoint with inline confirmation.
+- Publish message with optional subject, result display with MessageId.
+- Informational SNS fanout panel.
 
-Missing:
+Remaining gaps:
 
 | Feature | Floci API availability |
 |---|---|
-| Dedicated SNS page | UI work needed |
-| Create topic | `CreateTopic` |
-| Delete topic | `DeleteTopic` |
-| Publish message | `Publish` |
-| Topic attributes | `GetTopicAttributes` |
-| List subscriptions by topic | `ListSubscriptionsByTopic` |
-| Subscribe endpoint | `Subscribe` |
-| Unsubscribe endpoint | `Unsubscribe` |
+| Topic attributes (display mode, deduplication scope) | `GetTopicAttributes` / `SetTopicAttributes` |
 | Topic tags | `TagResource` / `ListTagsForResource` |
-
-## Priority Roadmap
-
-Recommended order by impact and implementation effort:
-
-| Priority | Service | Why |
-|---:|---|---|
-| 1 | S3 | Already close to complete; finish bucket/object management first. |
-| 2 | DynamoDB | Item CRUD and query mode make the table browser useful for real development. |
-| 3 | CloudWatch | Metric graphing, alarm management, and log-group actions improve debugging for every connected service. |
-| 4 | SQS | Queue lifecycle, purge, tags, and receive/delete complete the common workflow. |
-| 5 | Lambda | Detail panel and invoke flow unlock active debugging. |
-| 6 | SNS | Needs a dedicated page and topic/subscription workflows from scratch. |
+| Subscription confirmation flow | Protocol-specific — email/http require confirmation before `SubscriptionArn` is active |
+| Subscription filter policies | `SetSubscriptionAttributes` |
 
 ## Setup
 

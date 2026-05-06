@@ -296,9 +296,19 @@ async function listDynamoDbTables(signal?: AbortSignal): Promise<ResourceSummary
                         ItemCount?: number
                         TableSizeBytes?: number
                         BillingModeSummary?: { BillingMode?: string }
+                        KeySchema?: Array<{ AttributeName: string; KeyType: 'HASH' | 'RANGE' }>
+                        AttributeDefinitions?: Array<{ AttributeName: string; AttributeType: 'S' | 'N' | 'B' }>
                     }
                 }>(DYNAMODB('DescribeTable'), {TableName: tableName}, signal)
                 const table = detail.Table
+                const attrMap = Object.fromEntries(
+                    (table?.AttributeDefinitions ?? []).map((a) => [a.AttributeName, a.AttributeType])
+                )
+                const keySchema = (table?.KeySchema ?? []).map((k) => ({
+                    name: k.AttributeName,
+                    keyType: k.KeyType,
+                    attrType: attrMap[k.AttributeName] ?? 'S',
+                }))
                 return {
                     id: table?.TableArn ?? tableName,
                     name: table?.TableName ?? tableName,
@@ -308,6 +318,7 @@ async function listDynamoDbTables(signal?: AbortSignal): Promise<ResourceSummary
                         sizeBytes: table?.TableSizeBytes,
                         billingMode: table?.BillingModeSummary?.BillingMode,
                         createdAt: epochMs(table?.CreationDateTime),
+                        keySchema,
                     },
                 }
             } catch {
@@ -480,6 +491,115 @@ export async function putLogEvents(
     logEvents: Array<{ timestamp: number; message: string }>,
 ): Promise<void> {
     await flociJsonAction(LOGS('PutLogEvents'), {logGroupName, logStreamName, logEvents})
+}
+
+export async function deleteLogGroup(logGroupName: string, signal?: AbortSignal): Promise<void> {
+    await flociJsonAction(LOGS('DeleteLogGroup'), {logGroupName}, signal)
+}
+
+export async function deleteLogStream(logGroupName: string, logStreamName: string, signal?: AbortSignal): Promise<void> {
+    await flociJsonAction(LOGS('DeleteLogStream'), {logGroupName, logStreamName}, signal)
+}
+
+// ─── Lambda actions ──────────────────────────────────────────────────────────
+
+export interface LambdaFunctionConfig {
+    functionName: string
+    functionArn?: string
+    runtime?: string
+    handler?: string
+    codeSize?: number
+    description?: string
+    timeout?: number
+    memorySize?: number
+    lastModified?: string
+    state?: string
+    stateReason?: string
+    packageType?: string
+    architectures?: string[]
+    role?: string
+    environment?: Record<string, string>
+}
+
+export async function getLambdaFunction(name: string, signal?: AbortSignal): Promise<LambdaFunctionConfig> {
+    const res = await flociRestJson<{
+        FunctionName?: string
+        FunctionArn?: string
+        Runtime?: string
+        Handler?: string
+        CodeSize?: number
+        Description?: string
+        Timeout?: number
+        MemorySize?: number
+        LastModified?: string
+        State?: string
+        StateReason?: string
+        PackageType?: string
+        Architectures?: string[]
+        Role?: string
+        Environment?: { Variables?: Record<string, string> }
+    }>(`/2015-03-31/functions/${encodeURIComponent(name)}/configuration`, 'lambda', 'GET', undefined, signal)
+    return {
+        functionName: res.FunctionName ?? name,
+        functionArn: res.FunctionArn,
+        runtime: res.Runtime,
+        handler: res.Handler,
+        codeSize: res.CodeSize,
+        description: res.Description,
+        timeout: res.Timeout,
+        memorySize: res.MemorySize,
+        lastModified: res.LastModified,
+        state: res.State,
+        stateReason: res.StateReason,
+        packageType: res.PackageType,
+        architectures: res.Architectures,
+        role: res.Role,
+        environment: res.Environment?.Variables,
+    }
+}
+
+export interface LambdaInvokeResult {
+    statusCode: number
+    payload: string
+    functionError?: string
+    logResult?: string
+    executionDuration: number
+}
+
+export async function invokeLambdaFunction(name: string, payload = '{}', signal?: AbortSignal): Promise<LambdaInvokeResult> {
+    const start = performance.now()
+    const res = await fetch(`${PROXY}/2015-03-31/functions/${encodeURIComponent(name)}/invocations`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: payload,
+        signal,
+    })
+    const body = await res.text()
+    const duration = Math.round(performance.now() - start)
+    let logResult: string | undefined
+    const logB64 = res.headers.get('x-amz-log-result')
+    if (logB64) {
+        try {
+            logResult = atob(logB64)
+        } catch {
+            logResult = logB64
+        }
+    }
+    return {
+        statusCode: res.status,
+        payload: body,
+        functionError: res.headers.get('x-amz-function-error') ?? undefined,
+        logResult,
+        executionDuration: duration,
+    }
+}
+
+export async function deleteLambdaFunction(name: string, signal?: AbortSignal): Promise<void> {
+    const res = await fetch(`${PROXY}/2015-03-31/functions/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        signal,
+    })
+    if (!res.ok && res.status !== 204) throw new Error(`Delete failed: HTTP ${res.status}`)
 }
 
 // ─── S3 detail ───────────────────────────────────────────────────────────────
@@ -795,9 +915,88 @@ export async function peekSqsMessages(queueUrl: string, max = 10, signal?: Abort
     })
 }
 
+// ─── SQS queue management ────────────────────────────────────────────────────
+
+export interface SqsQueueConfig {
+    fifo?: boolean
+    visibilityTimeout?: number
+    messageRetentionPeriod?: number
+    maxMessageSize?: number
+    delaySeconds?: number
+    receiveWaitTime?: number
+    contentBasedDeduplication?: boolean
+}
+
+export async function createSqsQueue(name: string, config: SqsQueueConfig = {}, signal?: AbortSignal): Promise<string> {
+    const params: Record<string, string> = {Action: 'CreateQueue', QueueName: name}
+    const attrs: Array<[string, string]> = []
+    if (config.fifo) attrs.push(['FifoQueue', 'true'])
+    if (config.visibilityTimeout !== undefined) attrs.push(['VisibilityTimeout', String(config.visibilityTimeout)])
+    if (config.messageRetentionPeriod !== undefined) attrs.push(['MessageRetentionPeriod', String(config.messageRetentionPeriod)])
+    if (config.maxMessageSize !== undefined) attrs.push(['MaximumMessageSize', String(config.maxMessageSize)])
+    if (config.delaySeconds !== undefined) attrs.push(['DelaySeconds', String(config.delaySeconds)])
+    if (config.receiveWaitTime !== undefined) attrs.push(['ReceiveMessageWaitTimeSeconds', String(config.receiveWaitTime)])
+    if (config.contentBasedDeduplication) attrs.push(['ContentBasedDeduplication', 'true'])
+    attrs.forEach(([attrName, attrValue], idx) => {
+        params[`Attribute.${idx + 1}.Name`] = attrName
+        params[`Attribute.${idx + 1}.Value`] = attrValue
+    })
+    const xml = await flociQueryAction(params, signal)
+    const doc = parseXml(xml)
+    return textContent(doc, 'QueueUrl') ?? name
+}
+
+export async function deleteSqsQueue(queueUrl: string, signal?: AbortSignal): Promise<void> {
+    await flociQueryAction({Action: 'DeleteQueue', QueueUrl: queueUrl}, signal)
+}
+
+export async function purgeSqsQueue(queueUrl: string, signal?: AbortSignal): Promise<void> {
+    await flociQueryAction({Action: 'PurgeQueue', QueueUrl: queueUrl}, signal)
+}
+
+export async function deleteSqsMessage(queueUrl: string, receiptHandle: string, signal?: AbortSignal): Promise<void> {
+    await flociQueryAction({Action: 'DeleteMessage', QueueUrl: queueUrl, ReceiptHandle: receiptHandle}, signal)
+}
+
 // ─── DynamoDB detail ─────────────────────────────────────────────────────────
 
 export type DynamoDbItem = Record<string, unknown>
+
+export interface DynamoDbKeyAttr {
+    name: string
+    keyType: 'HASH' | 'RANGE'
+    attrType: 'S' | 'N' | 'B'
+}
+
+type RawDynamoAttr = { S?: string; N?: string; BOOL?: boolean; NULL?: boolean; L?: unknown[]; M?: Record<string, unknown> }
+
+function unmarshalAttr(val: RawDynamoAttr): unknown {
+    if (val.S !== undefined) return val.S
+    if (val.N !== undefined) return Number(val.N)
+    if (val.BOOL !== undefined) return val.BOOL
+    if (val.NULL) return null
+    if (val.L) return val.L.map((v) => unmarshalAttr(v as RawDynamoAttr))
+    if (val.M) return Object.fromEntries(Object.entries(val.M).map(([k, v]) => [k, unmarshalAttr(v as RawDynamoAttr)]))
+    return val
+}
+
+function unmarshalItems(raw: Array<Record<string, RawDynamoAttr>>): DynamoDbItem[] {
+    return raw.map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, unmarshalAttr(v)])))
+}
+
+function marshalValue(value: unknown): unknown {
+    if (value === null || value === undefined) return {NULL: true}
+    if (typeof value === 'boolean') return {BOOL: value}
+    if (typeof value === 'number') return {N: String(value)}
+    if (typeof value === 'string') return {S: value}
+    if (Array.isArray(value)) return {L: value.map(marshalValue)}
+    if (typeof value === 'object') return {M: Object.fromEntries(Object.entries(value as object).map(([k, v]) => [k, marshalValue(v)]))}
+    return {S: String(value)}
+}
+
+function marshalItem(item: DynamoDbItem): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(item).map(([k, v]) => [k, marshalValue(v)]))
+}
 
 export async function scanDynamoDbTable(
     tableName: string,
@@ -805,29 +1004,170 @@ export async function scanDynamoDbTable(
     signal?: AbortSignal,
 ): Promise<{ items: DynamoDbItem[]; count: number; scannedCount: number }> {
     const res = await flociJsonAction<{
-        Items?: Array<Record<string, {
-            S?: string;
-            N?: string;
-            BOOL?: boolean;
-            NULL?: boolean;
-            L?: unknown[];
-            M?: Record<string, unknown>
-        }>>
+        Items?: Array<Record<string, RawDynamoAttr>>
         Count?: number
         ScannedCount?: number
     }>(DYNAMODB('Scan'), {TableName: tableName, Limit: limit}, signal)
 
-    const items = (res.Items ?? []).map((raw) => {
-        const plain: DynamoDbItem = {}
-        for (const [key, val] of Object.entries(raw)) {
-            if (val.S !== undefined) plain[key] = val.S
-            else if (val.N !== undefined) plain[key] = Number(val.N)
-            else if (val.BOOL !== undefined) plain[key] = val.BOOL
-            else if (val.NULL) plain[key] = null
-            else plain[key] = val
-        }
-        return plain
-    })
-
+    const items = unmarshalItems(res.Items ?? [])
     return {items, count: res.Count ?? items.length, scannedCount: res.ScannedCount ?? items.length}
+}
+
+export async function queryDynamoDbTable(
+    tableName: string,
+    pkName: string,
+    pkValue: string | number,
+    skName?: string,
+    skOp?: string,
+    skValue?: string | number,
+    skValue2?: string | number,
+    limit = 50,
+    signal?: AbortSignal,
+): Promise<{ items: DynamoDbItem[]; count: number; scannedCount: number }> {
+    const toAttr = (v: string | number) => (typeof v === 'number' ? {N: String(v)} : {S: String(v)})
+    const exprValues: Record<string, unknown> = {':pk': toAttr(pkValue)}
+    const exprNames: Record<string, string> = {'#pk': pkName}
+    let keyCondition = '#pk = :pk'
+
+    if (skName && skOp && skValue !== undefined) {
+        exprNames['#sk'] = skName
+        exprValues[':sk'] = toAttr(skValue)
+        if (skOp === 'between' && skValue2 !== undefined) {
+            exprValues[':sk2'] = toAttr(skValue2)
+            keyCondition += ' AND #sk BETWEEN :sk AND :sk2'
+        } else if (skOp === 'begins_with') {
+            keyCondition += ' AND begins_with(#sk, :sk)'
+        } else {
+            keyCondition += ` AND #sk ${skOp} :sk`
+        }
+    }
+
+    const res = await flociJsonAction<{
+        Items?: Array<Record<string, RawDynamoAttr>>
+        Count?: number
+        ScannedCount?: number
+    }>(DYNAMODB('Query'), {
+        TableName: tableName,
+        KeyConditionExpression: keyCondition,
+        ExpressionAttributeNames: exprNames,
+        ExpressionAttributeValues: exprValues,
+        Limit: limit,
+    }, signal)
+
+    const items = unmarshalItems(res.Items ?? [])
+    return {items, count: res.Count ?? items.length, scannedCount: res.ScannedCount ?? items.length}
+}
+
+export async function createDynamoDbTable(
+    name: string,
+    partitionKey: {name: string; type: 'S' | 'N'},
+    sortKey?: {name: string; type: 'S' | 'N'},
+    billingMode: 'PAY_PER_REQUEST' | 'PROVISIONED' = 'PAY_PER_REQUEST',
+    signal?: AbortSignal,
+): Promise<void> {
+    await flociJsonAction(DYNAMODB('CreateTable'), {
+        TableName: name,
+        AttributeDefinitions: [
+            {AttributeName: partitionKey.name, AttributeType: partitionKey.type},
+            ...(sortKey ? [{AttributeName: sortKey.name, AttributeType: sortKey.type}] : []),
+        ],
+        KeySchema: [
+            {AttributeName: partitionKey.name, KeyType: 'HASH'},
+            ...(sortKey ? [{AttributeName: sortKey.name, KeyType: 'RANGE'}] : []),
+        ],
+        BillingMode: billingMode,
+        ...(billingMode === 'PROVISIONED' ? {ProvisionedThroughput: {ReadCapacityUnits: 5, WriteCapacityUnits: 5}} : {}),
+    }, signal)
+}
+
+export async function deleteDynamoDbTable(name: string, signal?: AbortSignal): Promise<void> {
+    await flociJsonAction(DYNAMODB('DeleteTable'), {TableName: name}, signal)
+}
+
+export async function putDynamoDbItem(tableName: string, item: DynamoDbItem, signal?: AbortSignal): Promise<void> {
+    await flociJsonAction(DYNAMODB('PutItem'), {TableName: tableName, Item: marshalItem(item)}, signal)
+}
+
+export async function deleteDynamoDbItem(tableName: string, key: DynamoDbItem, signal?: AbortSignal): Promise<void> {
+    await flociJsonAction(DYNAMODB('DeleteItem'), {TableName: tableName, Key: marshalItem(key)}, signal)
+}
+
+// ─── SNS detail ──────────────────────────────────────────────────────────────
+
+export interface SnsTopic {
+    arn: string
+    name: string
+}
+
+export interface SnsSubscription {
+    subscriptionArn: string
+    protocol: string
+    endpoint: string
+    topicArn: string
+    owner?: string
+}
+
+export async function listSnsTopicsDetail(signal?: AbortSignal): Promise<SnsTopic[]> {
+    const xml = await flociQueryAction({Action: 'ListTopics'}, signal)
+    const doc = parseXml(xml)
+    return Array.from(doc.querySelectorAll('TopicArn')).map((el) => {
+        const arn = el.textContent ?? ''
+        const name = arn.split(':').pop() ?? arn
+        return {arn, name}
+    }).filter((t) => t.name)
+}
+
+export async function createSnsTopic(name: string, fifo = false, signal?: AbortSignal): Promise<string> {
+    const params: Record<string, string> = {Action: 'CreateTopic', Name: name}
+    if (fifo) {
+        params['Attributes.entry.1.key'] = 'FifoTopic'
+        params['Attributes.entry.1.value'] = 'true'
+    }
+    const xml = await flociQueryAction(params, signal)
+    const doc = parseXml(xml)
+    return textContent(doc, 'TopicArn') ?? name
+}
+
+export async function deleteSnsTopic(arn: string, signal?: AbortSignal): Promise<void> {
+    await flociQueryAction({Action: 'DeleteTopic', TopicArn: arn}, signal)
+}
+
+export async function listSubscriptionsByTopic(topicArn: string, signal?: AbortSignal): Promise<SnsSubscription[]> {
+    const xml = await flociQueryAction({Action: 'ListSubscriptionsByTopic', TopicArn: topicArn}, signal)
+    const doc = parseXml(xml)
+    return Array.from(doc.querySelectorAll('member')).map((m) => ({
+        subscriptionArn: m.querySelector('SubscriptionArn')?.textContent ?? '',
+        protocol: m.querySelector('Protocol')?.textContent ?? '',
+        endpoint: m.querySelector('Endpoint')?.textContent ?? '',
+        topicArn: m.querySelector('TopicArn')?.textContent ?? '',
+        owner: m.querySelector('Owner')?.textContent ?? undefined,
+    })).filter((s) => s.subscriptionArn && s.subscriptionArn !== 'PendingConfirmation')
+}
+
+export async function subscribeToTopic(
+    topicArn: string,
+    protocol: string,
+    endpoint: string,
+    signal?: AbortSignal,
+): Promise<string> {
+    const xml = await flociQueryAction({Action: 'Subscribe', TopicArn: topicArn, Protocol: protocol, Endpoint: endpoint}, signal)
+    const doc = parseXml(xml)
+    return textContent(doc, 'SubscriptionArn') ?? ''
+}
+
+export async function unsubscribeFromTopic(subscriptionArn: string, signal?: AbortSignal): Promise<void> {
+    await flociQueryAction({Action: 'Unsubscribe', SubscriptionArn: subscriptionArn}, signal)
+}
+
+export async function publishSnsMessage(
+    topicArn: string,
+    message: string,
+    subject?: string,
+    signal?: AbortSignal,
+): Promise<string> {
+    const params: Record<string, string> = {Action: 'Publish', TopicArn: topicArn, Message: message}
+    if (subject) params.Subject = subject
+    const xml = await flociQueryAction(params, signal)
+    const doc = parseXml(xml)
+    return textContent(doc, 'MessageId') ?? ''
 }

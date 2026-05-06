@@ -7,6 +7,7 @@ import {S3Page} from '@/features/s3/S3Page'
 import {SQSPage} from '@/features/sqs/SQSPage'
 import {DynamoDBPage} from '@/features/dynamodb/DynamoDBPage'
 import {LambdaPage} from '@/features/lambda/LambdaPage'
+import {SNSPage} from '@/features/sns/SNSPage'
 
 export default function App() {
     return (
@@ -20,6 +21,7 @@ export default function App() {
                     <Route path="/sqs" element={<SQSPage/>}/>
                     <Route path="/lambda" element={<LambdaPage/>}/>
                     <Route path="/dynamodb" element={<DynamoDBPage/>}/>
+                    <Route path="/sns" element={<SNSPage/>}/>
                     <Route path="/:service" element={<ServicePage/>}/>
                     <Route path="*" element={<Navigate to="/dashboard" replace/>}/>
                 </Route>
