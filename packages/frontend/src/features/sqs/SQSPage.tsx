@@ -21,14 +21,19 @@ import {
   deleteSqsQueue,
   getSqsQueueAttributes,
   getSqsQueueTags,
+  listSqsDeadLetterSources,
+  listSqsMoveTasks,
+  setSqsQueueAttributes,
   setSqsQueueTags,
   removeSqsQueueTags,
   listServiceResources,
   peekSqsMessages,
   purgeSqsQueue,
   sendSqsMessage,
+  sendSqsMessageBatch,
+  startSqsRedrive,
 } from '@/api/services'
-import type { SqsQueueConfig, SqsTag } from '@/api/services'
+import type { SqsQueueAttributes, SqsQueueConfig, SqsTag } from '@/api/services'
 import { timeAgo } from '@/lib/utils'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -184,16 +189,38 @@ function CreateQueueModal({
 
 // ─── Send message panel ───────────────────────────────────────────────────────
 
-function SendPanel({ queueUrl, onClose }: { queueUrl: string; onClose: () => void }) {
+function SendPanel({ queueUrl, fifo, contentBasedDedup, onClose }: {
+  queueUrl: string
+  fifo: boolean
+  contentBasedDedup: boolean
+  onClose: () => void
+}) {
   const [body, setBody] = useState('')
+  const [batch, setBatch] = useState(false)
+  const [groupId, setGroupId] = useState('')
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
 
+  const batchLines = body.split('\n').map((l) => l.trim()).filter(Boolean)
+  const overLimit = batch && batchLines.length > 10
+
   const mutation = useMutation({
-    mutationFn: () => sendSqsMessage(queueUrl, body),
-    onSuccess: (messageId) => {
-      setResult({ ok: true, text: `Sent · MessageId: ${messageId}` })
-      setBody('')
+    mutationFn: async (): Promise<{ ok: boolean; text: string }> => {
+      const options = fifo
+        ? { messageGroupId: groupId.trim() || 'default', contentBasedDedup }
+        : {}
+      if (batch) {
+        const messages = batchLines.slice(0, 10)
+        if (messages.length === 0) throw new Error('Enter at least one non-empty line')
+        const res = await sendSqsMessageBatch(queueUrl, messages, options)
+        if (res.failed.length > 0) {
+          return { ok: false, text: `${res.successful.length} sent, ${res.failed.length} failed` }
+        }
+        return { ok: true, text: `Batch sent · ${res.successful.length} message(s)` }
+      }
+      const messageId = await sendSqsMessage(queueUrl, body, options)
+      return { ok: true, text: `Sent · MessageId: ${messageId}` }
     },
+    onSuccess: (r) => { setResult(r); if (r.ok) setBody('') },
     onError: (err) => setResult({ ok: false, text: err instanceof Error ? err.message : 'Send failed' }),
   })
 
@@ -201,12 +228,12 @@ function SendPanel({ queueUrl, onClose }: { queueUrl: string; onClose: () => voi
     <section className="widget send-panel">
       <div className="widget-header">
         <Send size={13} color="#8d9cad" />
-        <h3>Send message</h3>
-        <button
-          className="icon-btn"
-          style={{ marginLeft: 'auto' }}
-          onClick={onClose}
-        >
+        <h3>Send message{batch ? 's (batch)' : ''}</h3>
+        <label style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#8d9cad' }}>
+          <input type="checkbox" checked={batch} onChange={(e) => { setBatch(e.target.checked); setResult(null) }} />
+          Batch mode
+        </label>
+        <button className="icon-btn" onClick={onClose}>
           <X size={13} />
         </button>
       </div>
@@ -214,8 +241,24 @@ function SendPanel({ queueUrl, onClose }: { queueUrl: string; onClose: () => voi
         <textarea
           value={body}
           onChange={(e) => { setBody(e.target.value); setResult(null) }}
-          placeholder='Message body — plain text or JSON, e.g. {"event":"test"}'
+          placeholder={batch
+            ? 'One message per line — up to 10 messages sent as a batch'
+            : 'Message body — plain text or JSON, e.g. {"event":"test"}'}
         />
+        {fifo && (
+          <input
+            className="input"
+            value={groupId}
+            onChange={(e) => setGroupId(e.target.value)}
+            placeholder="Message group ID (FIFO) — defaults to 'default'"
+          />
+        )}
+        {overLimit && (
+          <p style={{ fontSize: 12, color: '#f59e0b', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <AlertTriangle size={13} />
+            {batchLines.length} lines — SQS caps a batch at 10; only the first 10 will be sent.
+          </p>
+        )}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button
             className="button primary"
@@ -223,7 +266,11 @@ function SendPanel({ queueUrl, onClose }: { queueUrl: string; onClose: () => voi
             onClick={() => mutation.mutate()}
           >
             <Send size={13} />
-            {mutation.isPending ? 'Sending…' : 'Send'}
+            {mutation.isPending
+              ? 'Sending…'
+              : batch
+                ? `Send batch${batchLines.length ? ` (${Math.min(batchLines.length, 10)})` : ''}`
+                : 'Send'}
           </button>
           {result && (
             <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: result.ok ? '#4ade80' : '#f87171' }}>
@@ -424,6 +471,297 @@ function QueueTagsPanel({ queueUrl }: { queueUrl: string }) {
   )
 }
 
+// ─── Dead-letter queue panel ──────────────────────────────────────────────────
+
+function DLQPanel({ queueUrl, queues }: { queueUrl: string; queues: Array<{ name: string; url: string }> }) {
+  const qc = useQueryClient()
+  const [targetUrl, setTargetUrl] = useState('')
+  const [maxReceive, setMaxReceive] = useState(3)
+  const [err, setErr] = useState('')
+
+  const attrQuery = useQuery({
+    queryKey: ['sqs-attrs', queueUrl],
+    queryFn: ({ signal }) => getSqsQueueAttributes(queueUrl, signal),
+  })
+
+  const saveMut = useMutation({
+    mutationFn: async () => {
+      const target = queues.find((q) => q.url === targetUrl)
+      if (!target) throw new Error('Select a dead-letter target queue')
+      const targetAttrs = await getSqsQueueAttributes(target.url)
+      if (!targetAttrs.queueArn) throw new Error('Could not resolve the target queue ARN')
+      await setSqsQueueAttributes(queueUrl, {
+        RedrivePolicy: JSON.stringify({
+          deadLetterTargetArn: targetAttrs.queueArn,
+          maxReceiveCount: maxReceive,
+        }),
+      })
+    },
+    onSuccess: () => { setErr(''); void qc.invalidateQueries({ queryKey: ['sqs-attrs', queueUrl] }) },
+    onError: (e) => setErr(e instanceof Error ? e.message : 'Save failed'),
+  })
+
+  const removeMut = useMutation({
+    mutationFn: () => setSqsQueueAttributes(queueUrl, { RedrivePolicy: '' }),
+    onSuccess: () => { setErr(''); void qc.invalidateQueries({ queryKey: ['sqs-attrs', queueUrl] }) },
+    onError: (e) => setErr(e instanceof Error ? e.message : 'Remove failed'),
+  })
+
+  const redriveTasks = useQuery({
+    queryKey: ['sqs-move-tasks', queueUrl],
+    queryFn: ({ signal }) => {
+      const arn = attrQuery.data?.queueArn
+      return arn ? listSqsMoveTasks(arn, signal) : Promise.resolve([])
+    },
+    enabled: Boolean(attrQuery.data?.queueArn),
+  })
+
+  const redriveMut = useMutation({
+    mutationFn: () => {
+      const arn = attrQuery.data?.queueArn
+      if (!arn) throw new Error('Queue ARN is not available yet')
+      return startSqsRedrive(arn)
+    },
+    onSuccess: () => { setErr(''); void qc.invalidateQueries({ queryKey: ['sqs-move-tasks', queueUrl] }) },
+    onError: (e) => setErr(e instanceof Error ? e.message : 'Redrive failed'),
+  })
+
+  const sourcesQuery = useQuery({
+    queryKey: ['sqs-dlq-sources', queueUrl],
+    queryFn: ({ signal }) => listSqsDeadLetterSources(queueUrl, signal),
+  })
+
+  const current = attrQuery.data?.redrivePolicy
+  const others = queues.filter((q) => q.url !== queueUrl)
+  const sourceQueues = sourcesQuery.data ?? []
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <section className="widget">
+        <div className="widget-header"><h3>Dead-letter queue</h3></div>
+        <div className="widget-body">
+          {attrQuery.isLoading ? (
+            <p style={{ fontSize: 12, color: 'var(--text-3)', margin: 0 }}>Loading…</p>
+          ) : current ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ fontSize: 13, margin: 0 }}>
+                  Failed messages move to{' '}
+                  <span className="mono" style={{ color: '#539fe5' }}>
+                    {current.deadLetterTargetArn.split(':').pop()}
+                  </span>
+                </p>
+                <p style={{ fontSize: 11, color: '#5f7080', margin: '2px 0 0' }}>
+                  After {current.maxReceiveCount} failed receive(s)
+                </p>
+              </div>
+              <button className="button danger" disabled={removeMut.isPending} onClick={() => removeMut.mutate()}>
+                {removeMut.isPending ? <Loader2 size={13} /> : <Trash2 size={13} />}
+                Remove
+              </button>
+            </div>
+          ) : (
+            <p style={{ fontSize: 12, color: 'var(--text-3)', margin: 0 }}>
+              No dead-letter queue configured for this queue.
+            </p>
+          )}
+        </div>
+      </section>
+
+      <section className="widget">
+        <div className="widget-header"><h3>{current ? 'Update' : 'Configure'} dead-letter queue</h3></div>
+        <div className="widget-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="field-row">
+            <label>Target queue</label>
+            <select className="input" style={{ flex: 1 }} value={targetUrl} onChange={(e) => setTargetUrl(e.target.value)}>
+              <option value="">Select a queue…</option>
+              {others.map((q) => <option key={q.url} value={q.url}>{q.name}</option>)}
+            </select>
+          </div>
+          <div className="field-row">
+            <label>Max receive count</label>
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={1000}
+              value={maxReceive}
+              onChange={(e) => setMaxReceive(Number(e.target.value))}
+            />
+            <span style={{ fontSize: 11, color: '#5f7080', whiteSpace: 'nowrap' }}>receives before redrive</span>
+          </div>
+          <div>
+            <button
+              className="button primary"
+              disabled={!targetUrl || maxReceive < 1 || saveMut.isPending}
+              onClick={() => saveMut.mutate()}
+            >
+              {saveMut.isPending ? <Loader2 size={13} /> : <CheckCircle2 size={13} />}
+              Save dead-letter queue
+            </button>
+          </div>
+          {err && <p style={{ fontSize: 12, color: '#f87171', margin: 0 }}>{err}</p>}
+          {others.length === 0 && (
+            <p style={{ fontSize: 12, color: 'var(--text-3)', margin: 0 }}>
+              Create another queue to use as the dead-letter target.
+            </p>
+          )}
+        </div>
+      </section>
+
+      <section className="widget">
+        <div className="widget-header">
+          <h3>Redrive messages</h3>
+          <button
+            className="button"
+            style={{ marginLeft: 'auto' }}
+            disabled={redriveMut.isPending || !attrQuery.data?.queueArn || sourceQueues.length === 0}
+            onClick={() => redriveMut.mutate()}
+          >
+            {redriveMut.isPending ? <Loader2 size={13} /> : <RefreshCw size={13} />}
+            Start redrive
+          </button>
+        </div>
+        <div className="widget-body">
+          {sourcesQuery.isLoading ? (
+            <p style={{ fontSize: 12, color: 'var(--text-3)', margin: 0 }}>Loading…</p>
+          ) : sourceQueues.length === 0 ? (
+            <p style={{ fontSize: 12, color: 'var(--text-3)', margin: 0 }}>
+              No queues use this queue as their dead-letter queue, so there is nothing to redrive.
+            </p>
+          ) : (
+            <>
+              <p style={{ fontSize: 12, color: 'var(--text-3)', margin: '0 0 8px' }}>
+                Dead-letter queue for {sourceQueues.length} source queue(s) — redrive moves messages back to them.
+              </p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+                {sourceQueues.map((q) => (
+                  <span
+                    key={q.url}
+                    className="mono"
+                    style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #2d3f57', borderRadius: 4, color: '#539fe5' }}
+                  >
+                    {q.name}
+                  </span>
+                ))}
+              </div>
+              {(redriveTasks.data ?? []).length === 0 ? (
+                <p style={{ fontSize: 12, color: 'var(--text-3)', margin: 0 }}>No redrive tasks yet.</p>
+              ) : (
+                <table className="table">
+                  <thead>
+                    <tr><th>Status</th><th>Moved</th><th>To move</th><th>Started</th></tr>
+                  </thead>
+                  <tbody>
+                    {(redriveTasks.data ?? []).map((t, i) => (
+                      <tr key={i}>
+                        <td>{t.status ?? '—'}</td>
+                        <td>{t.approximateNumberOfMessagesMoved ?? 0}</td>
+                        <td>{t.approximateNumberOfMessagesToMove ?? '—'}</td>
+                        <td style={{ color: '#8d9cad' }}>{timeAgo(t.startedTimestamp)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+// ─── Queue settings panel ─────────────────────────────────────────────────────
+
+function QueueSettingsPanel({ queueUrl }: { queueUrl: string }) {
+  const attrQuery = useQuery({
+    queryKey: ['sqs-attrs', queueUrl],
+    queryFn: ({ signal }) => getSqsQueueAttributes(queueUrl, signal),
+  })
+
+  if (attrQuery.isLoading) return <div className="empty compact"><p>Loading settings…</p></div>
+  if (!attrQuery.data) {
+    return <EmptyState icon={MessageSquare} title="Cannot load settings" description="Failed to fetch queue attributes." />
+  }
+  return <SettingsForm key={queueUrl} queueUrl={queueUrl} attrs={attrQuery.data} />
+}
+
+function SettingsForm({ queueUrl, attrs }: { queueUrl: string; attrs: SqsQueueAttributes }) {
+  const qc = useQueryClient()
+  const [visibilityTimeout, setVisibilityTimeout] = useState(attrs.visibilityTimeout ?? 30)
+  const [retention, setRetention] = useState(attrs.messageRetentionPeriod ?? 345600)
+  const [delay, setDelay] = useState(attrs.delaySeconds ?? 0)
+  const [maxSize, setMaxSize] = useState(attrs.maximumMessageSize ?? 262144)
+  const [waitTime, setWaitTime] = useState(attrs.receiveMessageWaitTimeSeconds ?? 0)
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const saveMut = useMutation({
+    mutationFn: () => setSqsQueueAttributes(queueUrl, {
+      VisibilityTimeout: String(visibilityTimeout),
+      MessageRetentionPeriod: String(retention),
+      DelaySeconds: String(delay),
+      MaximumMessageSize: String(maxSize),
+      ReceiveMessageWaitTimeSeconds: String(waitTime),
+    }),
+    onSuccess: () => {
+      setResult({ ok: true, text: 'Settings saved' })
+      void qc.invalidateQueries({ queryKey: ['sqs-attrs', queueUrl] })
+    },
+    onError: (e) => setResult({ ok: false, text: e instanceof Error ? e.message : 'Save failed' }),
+  })
+
+  return (
+    <section className="widget">
+      <div className="widget-header"><h3>Queue configuration</h3></div>
+      <div className="widget-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="field-row">
+          <label>Visibility timeout</label>
+          <input className="input" type="number" min={0} max={43200} value={visibilityTimeout}
+            onChange={(e) => { setVisibilityTimeout(Number(e.target.value)); setResult(null) }} />
+          <span style={{ fontSize: 11, color: '#5f7080', whiteSpace: 'nowrap' }}>seconds (0–43200)</span>
+        </div>
+        <div className="field-row">
+          <label>Delivery delay</label>
+          <input className="input" type="number" min={0} max={900} value={delay}
+            onChange={(e) => { setDelay(Number(e.target.value)); setResult(null) }} />
+          <span style={{ fontSize: 11, color: '#5f7080', whiteSpace: 'nowrap' }}>seconds (0–900)</span>
+        </div>
+        <div className="field-row">
+          <label>Receive wait time</label>
+          <input className="input" type="number" min={0} max={20} value={waitTime}
+            onChange={(e) => { setWaitTime(Number(e.target.value)); setResult(null) }} />
+          <span style={{ fontSize: 11, color: '#5f7080', whiteSpace: 'nowrap' }}>seconds (0–20, long polling)</span>
+        </div>
+        <div className="field-row">
+          <label>Max message size</label>
+          <input className="input" type="number" min={1024} max={262144} step={1024} value={maxSize}
+            onChange={(e) => { setMaxSize(Number(e.target.value)); setResult(null) }} />
+          <span style={{ fontSize: 11, color: '#5f7080', whiteSpace: 'nowrap' }}>bytes (1024–262144)</span>
+        </div>
+        <div className="field-row">
+          <label>Retention</label>
+          <input className="input" type="number" min={60} max={1209600} value={retention}
+            onChange={(e) => { setRetention(Number(e.target.value)); setResult(null) }} />
+          <span style={{ fontSize: 11, color: '#5f7080', whiteSpace: 'nowrap' }}>seconds (60–1209600)</span>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button className="button primary" disabled={saveMut.isPending} onClick={() => saveMut.mutate()}>
+            {saveMut.isPending ? <Loader2 size={13} /> : <CheckCircle2 size={13} />}
+            Save settings
+          </button>
+          {result && (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: result.ok ? '#4ade80' : '#f87171' }}>
+              {result.ok ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+              {result.text}
+            </span>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function SQSPage() {
@@ -433,7 +771,7 @@ export function SQSPage() {
   const [showSend, setShowSend] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [purgeConfirm, setPurgeConfirm] = useState(false)
-  const [detailTab, setDetailTab] = useState<'overview' | 'tags'>('overview')
+  const [detailTab, setDetailTab] = useState<'overview' | 'tags' | 'dlq' | 'settings'>('overview')
 
   const queuesQuery = useQuery({
     queryKey: ['resources', 'sqs'],
@@ -618,6 +956,8 @@ export function SQSPage() {
               <div className="sns-tabs" style={{ paddingLeft: 20 }}>
                 <button className={`sns-tab${detailTab === 'overview' ? ' active' : ''}`} onClick={() => setDetailTab('overview')}>Overview</button>
                 <button className={`sns-tab${detailTab === 'tags' ? ' active' : ''}`} onClick={() => setDetailTab('tags')}>Tags</button>
+                <button className={`sns-tab${detailTab === 'dlq' ? ' active' : ''}`} onClick={() => setDetailTab('dlq')}>Dead-letter queue</button>
+                <button className={`sns-tab${detailTab === 'settings' ? ' active' : ''}`} onClick={() => setDetailTab('settings')}>Settings</button>
               </div>
 
               {/* Purge confirm banner */}
@@ -646,11 +986,37 @@ export function SQSPage() {
                 </div>
               )}
 
+              {detailTab === 'dlq' && (
+                <div className="content" style={{ paddingTop: 12 }}>
+                  <DLQPanel
+                    key={selected.url}
+                    queueUrl={selected.url}
+                    queues={(queuesQuery.data ?? []).map((q) => ({
+                      name: q.name,
+                      url: (q.metadata?.queueUrl as string | undefined) ?? q.id,
+                    }))}
+                  />
+                </div>
+              )}
+
+              {detailTab === 'settings' && (
+                <div className="content" style={{ paddingTop: 12 }}>
+                  <QueueSettingsPanel key={selected.url} queueUrl={selected.url} />
+                </div>
+              )}
+
               {detailTab === 'overview' && <div className="content" style={{ paddingTop: 12 }}>
                 <div className="grid" style={{ gap: 14 }}>
 
                   {/* Send panel */}
-                  {showSend && <SendPanel queueUrl={selected.url} onClose={() => setShowSend(false)} />}
+                  {showSend && (
+                    <SendPanel
+                      queueUrl={selected.url}
+                      fifo={attrQuery.data?.fifoQueue ?? false}
+                      contentBasedDedup={attrQuery.data?.contentBasedDeduplication ?? false}
+                      onClose={() => setShowSend(false)}
+                    />
+                  )}
 
                   {/* Attributes */}
                   {attrQuery.isLoading ? (

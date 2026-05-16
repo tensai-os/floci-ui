@@ -50,7 +50,7 @@ These percentages describe UI coverage for the connected Floci service, not back
 |---|---:|---|
 | S3 | 95% | Full bucket and object lifecycle. List, create, delete buckets. Browse objects by prefix with folder navigation. Upload, download, delete, bulk-delete, and copy objects. Read object metadata and tags. Read/update bucket tags and versioning. |
 | DynamoDB | 95% | Full table lifecycle. List, describe, create, delete tables. Scan with configurable limit. Query by partition key with sort-key operators. Create, edit, and delete items via JSON editor. Key schema badges and typed value rendering. |
-| SQS | 95% | Full queue lifecycle. List, create, delete, purge queues. FIFO and content-based deduplication support. Send messages. Peek messages. Delete individual messages. Inline purge confirmation. |
+| SQS | 100% | Full queue lifecycle and management. List, create, delete, purge queues. Send single (FIFO-aware) and batch messages. Peek and delete messages. Queue tags. Editable configuration. Dead-letter queue config and redrive. |
 | Lambda | 90% | Full function detail. List functions, filter by name or runtime. Detail drawer with runtime, state, architecture, ARN, handler, memory, timeout, code size, environment variables. Invoke with JSON payload, response display, and log tail. Delete function. |
 | SNS | 90% | Full topic lifecycle. List, create (standard and FIFO), delete topics. List and manage subscriptions per topic (sqs, lambda, http, https, email, sms). Subscribe and unsubscribe endpoints. Publish messages with optional subject. |
 | CloudWatch | 90% | Full log management. List, filter, create, delete log groups with retention policy. List and delete log streams. Browse and search log events. Rich parsing of Floci ingestor events into HTTP method/status/latency rows. List metrics and alarms. Auto-refresh every 10 s. |
@@ -142,7 +142,7 @@ Remaining gaps:
 </details>
 
 <details>
-<summary><strong>SQS — 95%</strong></summary>
+<summary><strong>SQS — 100%</strong></summary>
 
 ### SQS
 
@@ -154,18 +154,21 @@ Implemented:
 - Purge queue with inline amber warning.
 - Select queue and read attributes.
 - Show message counts.
-- Show configuration (visibility timeout, retention, max message size, FIFO, receive wait).
-- Send message.
+- Edit queue configuration via the Settings tab (visibility timeout, delivery delay, receive wait time, max message size, retention).
+- Send message — FIFO-aware: a message group id is sent for FIFO queues, and a deduplication id is generated only when the queue does not use content-based deduplication.
+- Send message batch (up to 10, with an explicit over-limit warning).
 - Peek messages without consuming them.
 - Delete individual messages after peek.
+- Queue tags: list, add, and remove.
+- Dead-letter queue configuration: set and clear a redrive policy targeting another queue.
+- Dead-letter redrive: list the source queues this queue serves, and start a message move task to send their messages back.
 
-Remaining gaps:
+Known limitations:
 
-| Feature | Floci API availability |
+| Feature | Status |
 |---|---|
-| Send message batch | `SendMessageBatch` |
-| Queue tags | `ListQueueTags` / `TagQueue` / `UntagQueue` |
-| Dead-letter queue configuration UI | `GetQueueAttributes` / `SetQueueAttributes` |
+| Redrive task history | Floci core accepts `StartMessageMoveTask`, but its `ListMessageMoveTasks` handler currently returns no results — the task table stays empty until Floci core is fixed |
+| Per-message visibility control | `ChangeMessageVisibility` is not yet surfaced |
 
 </details>
 

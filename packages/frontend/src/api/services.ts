@@ -231,6 +231,11 @@ async function listSqsQueues(signal?: AbortSignal): Promise<ResourceSummary[]> {
     return queues.map(q => ({id: q.url, name: q.name, status: 'available', metadata: {queueUrl: q.url}}))
 }
 
+export interface SqsRedrivePolicy {
+    deadLetterTargetArn: string
+    maxReceiveCount: number
+}
+
 export interface SqsQueueAttributes {
     approximateNumberOfMessages?: number
     approximateNumberOfMessagesDelayed?: number
@@ -244,6 +249,8 @@ export interface SqsQueueAttributes {
     delaySeconds?: number
     fifoQueue?: boolean
     contentBasedDeduplication?: boolean
+    queueArn?: string
+    redrivePolicy?: SqsRedrivePolicy
 }
 
 export interface SqsQueueConfig {
@@ -275,8 +282,26 @@ export async function purgeSqsQueue(queueUrl: string, signal?: AbortSignal): Pro
     await apiPost('/sqs/queue/purge', 'sqs', {url: queueUrl}, signal)
 }
 
-export async function sendSqsMessage(queueUrl: string, messageBody: string, signal?: AbortSignal): Promise<string> {
-    const res = await apiPost<{messageId: string}>('/sqs/queue/message', 'sqs', {url: queueUrl, messageBody}, signal)
+/**
+ * FIFO send options. `contentBasedDedup` reflects the queue's setting so the
+ * API knows whether it must generate a MessageDeduplicationId.
+ */
+export interface SqsSendOptions {
+    messageGroupId?: string
+    contentBasedDedup?: boolean
+}
+
+export async function sendSqsMessage(
+    queueUrl: string,
+    messageBody: string,
+    options: SqsSendOptions = {},
+    signal?: AbortSignal,
+): Promise<string> {
+    const res = await apiPost<{messageId: string}>('/sqs/queue/message', 'sqs', {
+        url: queueUrl,
+        messageBody,
+        ...options,
+    }, signal)
     return res.messageId
 }
 
@@ -306,6 +331,58 @@ export async function setSqsQueueTags(queueUrl: string, tags: SqsTag[], signal?:
 
 export async function removeSqsQueueTags(queueUrl: string, keys: string[], signal?: AbortSignal): Promise<void> {
     await apiPost('/sqs/queue/tags/delete', 'sqs', {url: queueUrl, keys}, signal)
+}
+
+export interface SqsBatchResult {
+    successful: Array<{id: string; messageId: string}>
+    failed: Array<{id: string; message: string}>
+}
+
+export async function sendSqsMessageBatch(
+    queueUrl: string,
+    messages: string[],
+    options: SqsSendOptions = {},
+    signal?: AbortSignal,
+): Promise<SqsBatchResult> {
+    return apiPost<SqsBatchResult>('/sqs/queue/messages/batch', 'sqs', {
+        url: queueUrl,
+        messages,
+        ...options,
+    }, signal)
+}
+
+export async function setSqsQueueAttributes(
+    queueUrl: string,
+    attributes: Record<string, string>,
+    signal?: AbortSignal,
+): Promise<void> {
+    await apiPut('/sqs/queue/attributes', 'sqs', {url: queueUrl, attributes}, signal)
+}
+
+export interface SqsMoveTask {
+    status?: string
+    approximateNumberOfMessagesMoved?: number
+    approximateNumberOfMessagesToMove?: number
+    startedTimestamp?: number
+    failureReason?: string
+}
+
+export async function startSqsRedrive(sourceArn: string, signal?: AbortSignal): Promise<{taskHandle: string}> {
+    return apiPost<{taskHandle: string}>('/sqs/queue/redrive', 'sqs', {sourceArn}, signal)
+}
+
+export async function listSqsMoveTasks(sourceArn: string, signal?: AbortSignal): Promise<SqsMoveTask[]> {
+    return apiGet<SqsMoveTask[]>(`/sqs/queue/redrive/tasks?sourceArn=${encodeURIComponent(sourceArn)}`, 'sqs', signal)
+}
+
+/** Queues that send their failed messages to this queue (i.e. use it as a DLQ). */
+export async function listSqsDeadLetterSources(
+    queueUrl: string,
+    signal?: AbortSignal,
+): Promise<Array<{name: string; url: string}>> {
+    return apiGet<Array<{name: string; url: string}>>(
+        `/sqs/queue/dlq-sources?url=${encodeURIComponent(queueUrl)}`, 'sqs', signal,
+    )
 }
 
 // ─── SNS ──────────────────────────────────────────────────────────────────────
