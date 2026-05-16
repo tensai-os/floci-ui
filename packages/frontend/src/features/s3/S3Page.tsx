@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react'
-import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
+import {useQueryClient} from '@tanstack/react-query'
 import {
     ChevronRight,
     Copy,
@@ -21,25 +21,32 @@ import {
     X,
 } from 'lucide-react'
 import {EmptyState} from '@/components/EmptyState'
-import type {S3ObjectMetadata, S3Tag} from '@/api/services'
 import {
-    copyS3Object,
-    createS3Bucket,
-    deleteS3Bucket,
-    deleteS3Object,
-    deleteS3Objects,
-    getBucketTags,
-    getBucketVersioning,
-    getS3ObjectMetadata,
-    getS3ObjectTags,
-    listS3Objects,
-    listServiceResources,
-    putBucketTags,
-    putBucketVersioning,
-    putS3ObjectTags,
+    type CreateS3BucketInput,
     s3ObjectDownloadUrl,
-    uploadS3Object,
-} from '@/api/services'
+    type S3ObjectMetadata,
+    type S3Tag,
+} from '@/api/aws/s3.api'
+import {
+    s3QueryKeys,
+    useBucketTagsQuery,
+    useBucketVersioningQuery,
+    useS3BucketsQuery,
+    useS3ObjectMetadataQuery,
+    useS3ObjectsQuery,
+    useS3ObjectTagsQuery,
+} from '@/api/aws/s3.queries'
+import {
+    useCopyS3ObjectMutation,
+    useCreateS3BucketMutation,
+    useDeleteS3BucketMutation,
+    useDeleteS3ObjectMutation,
+    useDeleteS3ObjectsMutation,
+    usePutBucketTagsMutation,
+    usePutBucketVersioningMutation,
+    usePutS3ObjectTagsMutation,
+    useUploadS3ObjectMutation,
+} from '@/api/aws/s3.mutations'
 import {timeAgo} from '@/lib/utils'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -158,6 +165,7 @@ function TagEditor({
                        onSave,
                        isPending,
                        emptyText = 'No tags. Click + to add one.',
+                       showSave = true,
                    }: {
     tags: S3Tag[]
     setTags: React.Dispatch<React.SetStateAction<S3Tag[]>>
@@ -167,6 +175,7 @@ function TagEditor({
     onSave: () => void
     isPending: boolean
     emptyText?: string
+    showSave?: boolean
 }) {
     function updateTag(idx: number, field: 'key' | 'value', val: string) {
         setTags((prev) => prev.map((t, i) => (i === idx ? {...t, [field]: val} : t)))
@@ -218,7 +227,7 @@ function TagEditor({
             <button className="button" style={{alignSelf: 'flex-start', marginTop: 4}} onClick={addTag}>
                 <Plus size={13}/> Add tag
             </button>
-            <div style={{
+            {showSave && <div style={{
                 marginTop: 8,
                 display: 'flex',
                 gap: 8,
@@ -236,7 +245,7 @@ function TagEditor({
                         color: saveMsg.startsWith('Saved') ? '#4ade80' : '#f87171'
                     }}>{saveMsg}</span>
                 )}
-            </div>
+            </div>}
         </>
     )
 }
@@ -257,24 +266,15 @@ function ObjectInfoDrawer({
     const [dirty, setDirty] = useState(false)
     const [saveMsg, setSaveMsg] = useState<string | null>(null)
 
-    const metaQuery = useQuery({
-        queryKey: ['s3-meta', bucket, objectKey],
-        queryFn: ({signal}) => getS3ObjectMetadata(bucket, objectKey!, signal),
-        enabled: Boolean(objectKey),
-    })
+    const metaQuery = useS3ObjectMetadataQuery(bucket, objectKey)
 
-    const tagsQuery = useQuery({
-        queryKey: ['s3-obj-tags', bucket, objectKey],
-        queryFn: ({signal}) => getS3ObjectTags(bucket, objectKey!, signal),
-        enabled: Boolean(objectKey),
-    })
+    const tagsQuery = useS3ObjectTagsQuery(bucket, objectKey)
 
     useEffect(() => {
         if (tagsQuery.data && !dirty) setTags(tagsQuery.data)
     }, [tagsQuery.data, dirty])
 
-    const saveMutation = useMutation({
-        mutationFn: () => putS3ObjectTags(bucket, objectKey!, tags),
+    const saveMutation = usePutS3ObjectTagsMutation({
         onSuccess: () => {
             setDirty(false)
             setSaveMsg('Saved ✓')
@@ -326,7 +326,7 @@ function ObjectInfoDrawer({
                         dirty={dirty}
                         setDirty={setDirty}
                         saveMsg={saveMsg}
-                        onSave={() => saveMutation.mutate()}
+                        onSave={() => saveMutation.mutate({bucket, key: objectKey!, tags})}
                         isPending={saveMutation.isPending}
                     />
                 )}
@@ -351,17 +351,9 @@ function BucketSettingsDrawer({
     const [dirty, setDirty] = useState(false)
     const [saveMsg, setSaveMsg] = useState<string | null>(null)
 
-    const versioningQuery = useQuery({
-        queryKey: ['s3-versioning', bucket],
-        queryFn: ({signal}) => getBucketVersioning(bucket, signal),
-        enabled: open,
-    })
+    const versioningQuery = useBucketVersioningQuery(bucket, open)
 
-    const bucketTagsQuery = useQuery({
-        queryKey: ['s3-bucket-tags', bucket],
-        queryFn: ({signal}) => getBucketTags(bucket, signal),
-        enabled: open,
-    })
+    const bucketTagsQuery = useBucketTagsQuery(bucket, open)
 
     useEffect(() => {
         if (!open) {
@@ -376,13 +368,11 @@ function BucketSettingsDrawer({
         if (bucketTagsQuery.data && !dirty) setTags(bucketTagsQuery.data)
     }, [bucketTagsQuery.data, dirty])
 
-    const versioningMutation = useMutation({
-        mutationFn: (enabled: boolean) => putBucketVersioning(bucket, enabled),
+    const versioningMutation = usePutBucketVersioningMutation({
         onSuccess: () => void versioningQuery.refetch(),
     })
 
-    const tagsMutation = useMutation({
-        mutationFn: () => putBucketTags(bucket, tags),
+    const tagsMutation = usePutBucketTagsMutation({
         onSuccess: () => {
             setDirty(false)
             setSaveMsg('Saved ✓')
@@ -432,7 +422,7 @@ function BucketSettingsDrawer({
                                         type="checkbox"
                                         checked={versioningStatus === 'Enabled'}
                                         disabled={versioningMutation.isPending}
-                                        onChange={(e) => versioningMutation.mutate(e.target.checked)}
+                                        onChange={(e) => versioningMutation.mutate({bucket, enabled: e.target.checked})}
                                     />
                                     <span className="toggle-track"/>
                                 </label>
@@ -468,7 +458,7 @@ function BucketSettingsDrawer({
                         dirty={dirty}
                         setDirty={setDirty}
                         saveMsg={saveMsg}
-                        onSave={() => tagsMutation.mutate()}
+                        onSave={() => tagsMutation.mutate({bucket, tags})}
                         isPending={tagsMutation.isPending}
                         emptyText="No bucket tags. Click + to add one."
                     />
@@ -485,35 +475,72 @@ function CreateBucketBar({
                              onCancel,
                              isPending,
                          }: {
-    onConfirm: (name: string) => void
+    onConfirm: (input: CreateS3BucketInput) => void
     onCancel: () => void
     isPending: boolean
 }) {
     const [name, setName] = useState('')
+    const [tags, setTags] = useState<S3Tag[]>([])
+    const [tagsDirty, setTagsDirty] = useState(false)
+    const [versioningEnabled, setVersioningEnabled] = useState(false)
+    const validTags = tags.filter((tag) => tag.key.trim() && tag.value.trim())
+    const createInput: CreateS3BucketInput = {
+        name: name.trim(),
+        tags: validTags.length ? validTags : undefined,
+        versioningEnabled,
+    }
+
+    function submit() {
+        if (name.trim().length >= 3) onConfirm(createInput)
+    }
+
     return (
         <div className="create-bucket-bar">
-            <Database size={13} color="#ff9900"/>
-            <input
-                className="input"
-                autoFocus
-                value={name}
-                onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ''))}
-                placeholder="my-bucket-name"
-                onKeyDown={(e) => {
-                    if (e.key === 'Enter' && name.trim()) onConfirm(name.trim())
-                    if (e.key === 'Escape') onCancel()
-                }}
-                style={{flex: 1, minWidth: 0}}
-            />
-            <button
-                className="button primary"
-                disabled={name.trim().length < 3 || isPending}
-                onClick={() => onConfirm(name.trim())}
-            >
-                {isPending ? <Loader2 size={13}/> : null}
-                Create
-            </button>
-            <button className="button" onClick={onCancel} disabled={isPending}><X size={13}/></button>
+            <div style={{display: 'flex', alignItems: 'center', gap: 8, width: '100%'}}>
+                <Database size={13} color="#ff9900"/>
+                <input
+                    className="input"
+                    autoFocus
+                    value={name}
+                    onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ''))}
+                    placeholder="my-bucket-name"
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') submit()
+                        if (e.key === 'Escape') onCancel()
+                    }}
+                    style={{flex: 1, minWidth: 0}}
+                />
+                <label style={{display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#8d9cad'}}>
+                    <input
+                        type="checkbox"
+                        checked={versioningEnabled}
+                        onChange={(e) => setVersioningEnabled(e.target.checked)}
+                    />
+                    Versioning
+                </label>
+                <button
+                    className="button primary"
+                    disabled={name.trim().length < 3 || isPending}
+                    onClick={submit}
+                >
+                    {isPending ? <Loader2 size={13}/> : null}
+                    Create
+                </button>
+                <button className="button" onClick={onCancel} disabled={isPending}><X size={13}/></button>
+            </div>
+            <div style={{width: '100%', marginTop: 8}}>
+                <TagEditor
+                    tags={tags}
+                    setTags={setTags}
+                    dirty={tagsDirty}
+                    setDirty={setTagsDirty}
+                    saveMsg={null}
+                    onSave={() => undefined}
+                    isPending={false}
+                    emptyText="No bucket tags. Click + to add one before creating."
+                    showSave={false}
+                />
+            </div>
         </div>
     )
 }
@@ -539,8 +566,7 @@ function CopyModal({
         return dir ? `${dir}/copy-of-${filename}` : `copy-of-${filename}`
     })
 
-    const copyMutation = useMutation({
-        mutationFn: () => copyS3Object(srcBucket, srcKey, destBucket, destKey),
+    const copyMutation = useCopyS3ObjectMutation({
         onSuccess: () => {
             onSuccess();
             onClose()
@@ -590,7 +616,7 @@ function CopyModal({
                     <button
                         className="button primary"
                         disabled={!destBucket.trim() || !destKey.trim() || copyMutation.isPending}
-                        onClick={() => copyMutation.mutate()}
+                        onClick={() => copyMutation.mutate({srcBucket, srcKey, destBucket, destKey})}
                     >
                         {copyMutation.isPending ? <Loader2 size={13}/> : <Copy size={13}/>}
                         Copy
@@ -684,33 +710,26 @@ export function S3Page() {
     const [copyKey, setCopyKey] = useState<string | null>(null)
 
     // ── Queries ──
-    const bucketsQuery = useQuery({
-        queryKey: ['resources', 's3'],
-        queryFn: ({signal}) => listServiceResources('s3', signal),
-    })
+    const bucketsQuery = useS3BucketsQuery()
 
-    const objectsQuery = useQuery({
-        queryKey: ['s3-objects', selectedBucket, prefix],
-        queryFn: ({signal}) => listS3Objects(selectedBucket!, prefix || undefined, signal),
-        enabled: Boolean(selectedBucket),
-    })
+    const objectsQuery = useS3ObjectsQuery(selectedBucket, prefix)
 
     // ── Mutations ──
-    const createBucketMutation = useMutation({
-        mutationFn: (name: string) => createS3Bucket(name),
-        onSuccess: (_, name) => {
+    const uploadObjectMutation = useUploadS3ObjectMutation()
+    const deleteObjectMutation = useDeleteS3ObjectMutation()
+    const deleteObjectsMutation = useDeleteS3ObjectsMutation()
+
+    const createBucketMutation = useCreateS3BucketMutation({
+        onSuccess: (_, input) => {
             setCreateBucketMode(false)
-            void qc.invalidateQueries({queryKey: ['resources', 's3']})
-            selectBucket(name)
+            selectBucket(input.name)
         },
         onError: (err) => alert(`Create bucket failed: ${err instanceof Error ? err.message : err}`),
     })
 
-    const deleteBucketMutation = useMutation({
-        mutationFn: (name: string) => deleteS3Bucket(name),
+    const deleteBucketMutation = useDeleteS3BucketMutation({
         onSuccess: (_, name) => {
             if (selectedBucket === name) goToRoot()
-            void qc.invalidateQueries({queryKey: ['resources', 's3']})
         },
         onError: (err) => alert(`Delete bucket failed: ${err instanceof Error ? err.message : err}`),
     })
@@ -757,7 +776,11 @@ export function S3Page() {
         await Promise.all(
             files.map(async (file) => {
                 try {
-                    await uploadS3Object(selectedBucket, prefix + file.name, file)
+                    await uploadObjectMutation.mutateAsync({
+                        bucket: selectedBucket,
+                        key: prefix + file.name,
+                        file,
+                    })
                     setUploads((prev) => new Map(prev).set(file.name, 'done'))
                 } catch {
                     setUploads((prev) => new Map(prev).set(file.name, 'error'))
@@ -774,8 +797,8 @@ export function S3Page() {
         if (!window.confirm(`Delete "${basename(key, prefix)}"?`)) return
         setDeleting((prev) => new Set(prev).add(key))
         try {
-            await deleteS3Object(selectedBucket, key)
-            void qc.invalidateQueries({queryKey: ['s3-objects', selectedBucket, prefix]})
+            await deleteObjectMutation.mutateAsync({bucket: selectedBucket, key})
+            void qc.invalidateQueries({queryKey: s3QueryKeys.objects(selectedBucket, prefix)})
         } catch (err) {
             alert(`Delete failed: ${err instanceof Error ? err.message : err}`)
         } finally {
@@ -793,9 +816,9 @@ export function S3Page() {
         if (!window.confirm(`Delete ${selectedKeys.size} object${selectedKeys.size !== 1 ? 's' : ''}? This cannot be undone.`)) return
         setBulkDeleting(true)
         try {
-            await deleteS3Objects(selectedBucket, [...selectedKeys])
+            await deleteObjectsMutation.mutateAsync({bucket: selectedBucket, keys: [...selectedKeys]})
             setSelectedKeys(new Set())
-            void qc.invalidateQueries({queryKey: ['s3-objects', selectedBucket, prefix]})
+            void qc.invalidateQueries({queryKey: s3QueryKeys.objects(selectedBucket, prefix)})
         } catch (err) {
             alert(`Bulk delete failed: ${err instanceof Error ? err.message : err}`)
         } finally {
@@ -814,9 +837,13 @@ export function S3Page() {
         if (!selectedBucket) return
         const key = prefix + name.replace(/\/$/, '') + '/'
         try {
-            await uploadS3Object(selectedBucket, key, new Blob(['']))
+            await uploadObjectMutation.mutateAsync({
+                bucket: selectedBucket,
+                key,
+                file: new Blob(['']),
+            })
             setNewFolderMode(false)
-            void qc.invalidateQueries({queryKey: ['s3-objects', selectedBucket, prefix]})
+            void qc.invalidateQueries({queryKey: s3QueryKeys.objects(selectedBucket, prefix)})
         } catch (err) {
             alert(`Could not create folder: ${err instanceof Error ? err.message : err}`)
         }
@@ -890,7 +917,7 @@ export function S3Page() {
                     srcBucket={selectedBucket}
                     srcKey={copyKey}
                     onClose={() => setCopyKey(null)}
-                    onSuccess={() => void qc.invalidateQueries({queryKey: ['s3-objects', selectedBucket, prefix]})}
+                    onSuccess={() => void qc.invalidateQueries({queryKey: s3QueryKeys.objects(selectedBucket, prefix)})}
                 />
             )}
 
@@ -956,7 +983,7 @@ export function S3Page() {
 
                     {createBucketMode && (
                         <CreateBucketBar
-                            onConfirm={(name) => createBucketMutation.mutate(name)}
+                            onConfirm={(input) => createBucketMutation.mutate(input)}
                             onCancel={() => setCreateBucketMode(false)}
                             isPending={createBucketMutation.isPending}
                         />
