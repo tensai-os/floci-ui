@@ -32,7 +32,13 @@ app.get('/log-groups', async (c) => {
 
 app.post('/log-groups', async (c) => {
     const {name, retentionInDays} = await c.req.json<{name: string; retentionInDays?: number}>()
-    await cwLogs.send(new CreateLogGroupCommand({logGroupName: name}))
+    try {
+        await cwLogs.send(new CreateLogGroupCommand({logGroupName: name}))
+    } catch (err) {
+        // An already-existing log group is an acceptable end state — the
+        // ingestor re-requests groups it created on earlier navigations.
+        if ((err as {name?: string}).name !== 'ResourceAlreadyExistsException') throw err
+    }
     if (retentionInDays) {
         await cwLogs.send(new PutRetentionPolicyCommand({logGroupName: name, retentionInDays}))
     }
@@ -60,7 +66,12 @@ app.get('/log-streams', async (c) => {
 
 app.post('/log-streams', async (c) => {
     const {group, name} = await c.req.json<{group: string; name: string}>()
-    await cwLogs.send(new CreateLogStreamCommand({logGroupName: group, logStreamName: name}))
+    try {
+        await cwLogs.send(new CreateLogStreamCommand({logGroupName: group, logStreamName: name}))
+    } catch (err) {
+        // An already-existing log stream is an acceptable end state.
+        if ((err as {name?: string}).name !== 'ResourceAlreadyExistsException') throw err
+    }
     return c.json({ok: true})
 })
 
