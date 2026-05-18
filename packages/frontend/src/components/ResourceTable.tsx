@@ -1,3 +1,4 @@
+import {useState} from 'react'
 import {Trash2} from 'lucide-react'
 import type {CloudResource} from '@/types/resource'
 import type {ServiceSchema} from '@/types/schema'
@@ -12,6 +13,8 @@ interface ResourceTableProps {
 }
 
 export function ResourceTable({schema, resources, selectedId, onSelect, onDelete, deletingId}: ResourceTableProps) {
+    const [confirmId, setConfirmId] = useState<string | null>(null)
+
     if (resources.length === 0) {
         return (
             <div className="empty compact">
@@ -38,15 +41,29 @@ export function ResourceTable({schema, resources, selectedId, onSelect, onDelete
                             </td>
                         ))}
                         <td className="table-actions">
-                            <button
-                                className="icon-btn danger"
-                                type="button"
-                                title={`Delete ${resource.name}`}
-                                disabled={deletingId === resource.id}
-                                onClick={() => onDelete(resource)}
-                            >
-                                <Trash2 size={13}/>
-                            </button>
+                            {confirmId === resource.id ? (
+                                <button
+                                    className="button danger compact"
+                                    type="button"
+                                    disabled={deletingId === resource.id}
+                                    onClick={() => {
+                                        onDelete(resource)
+                                        setConfirmId(null)
+                                    }}
+                                >
+                                    Confirm
+                                </button>
+                            ) : (
+                                <button
+                                    className="icon-btn danger"
+                                    type="button"
+                                    title={`Delete ${resource.name}`}
+                                    disabled={deletingId === resource.id}
+                                    onClick={() => setConfirmId(resource.id)}
+                                >
+                                    <Trash2 size={13}/>
+                                </button>
+                            )}
                         </td>
                     </tr>
                 ))}

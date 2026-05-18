@@ -1,10 +1,9 @@
-import {useMemo, useState} from 'react'
+import {type ElementType, useEffect, useMemo, useState} from 'react'
 import {ChevronDown, ChevronUp, Eye, Filter, Plus, RefreshCw, Table2, Workflow} from 'lucide-react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {
     createCloudResource,
     deleteCloudResource,
-    getCloudStatus,
     getServiceSchema,
     listCloudResources,
 } from '@/api/cloudProxyClient'
@@ -12,18 +11,22 @@ import {DynamicFormRenderer} from '@/components/DynamicFormRenderer'
 import {ResourceInspector} from '@/components/ResourceInspector'
 import {ResourceTable} from '@/components/ResourceTable'
 import {StorageObjectBrowser} from '@/components/StorageObjectBrowser'
-import type {CloudProvider, CloudServiceType} from '@/types/cloud'
-import type {CloudResource} from '@/types/resource'
+import type {CloudProvider, CloudServiceType, CloudStatus} from '@/types/cloud'
+import type {CloudResource, StorageObject} from '@/types/resource'
+import type {ServiceSchema} from '@/types/schema'
 
 interface DynamicResourceViewProps {
     cloud: CloudProvider
     service: CloudServiceType
+    cloudStatus?: CloudStatus
+    statusLoading?: boolean
 }
 
-export function DynamicResourceView({cloud, service}: DynamicResourceViewProps) {
+export function DynamicResourceView({cloud, service, cloudStatus, statusLoading = false}: DynamicResourceViewProps) {
     const qc = useQueryClient()
     const [search, setSearch] = useState('')
     const [selected, setSelected] = useState<CloudResource | undefined>()
+    const [selectedObject, setSelectedObject] = useState<StorageObject | undefined>()
     const [createOpen, setCreateOpen] = useState(false)
     const resourcesKey = useMemo(() => ['cloud-resources', cloud, service, search], [cloud, service, search])
 
@@ -32,16 +35,10 @@ export function DynamicResourceView({cloud, service}: DynamicResourceViewProps) 
         queryFn: ({signal}) => getServiceSchema(cloud, service, signal),
     })
 
-    const statusQuery = useQuery({
-        queryKey: ['cloud-status', cloud],
-        queryFn: ({signal}) => getCloudStatus(cloud, signal),
-        refetchInterval: 10_000,
-    })
-
     const resourcesQuery = useQuery({
         queryKey: resourcesKey,
         queryFn: ({signal}) => listCloudResources(cloud, service, search, signal),
-        enabled: schemaQuery.isSuccess,
+        enabled: schemaQuery.isSuccess && cloudStatus?.runtime === 'reachable',
     })
 
     const createMut = useMutation({
@@ -56,6 +53,10 @@ export function DynamicResourceView({cloud, service}: DynamicResourceViewProps) 
             void qc.invalidateQueries({queryKey: ['cloud-resources', cloud, service]})
         },
     })
+
+    useEffect(() => {
+        setSelectedObject(undefined)
+    }, [selected?.id])
 
     if (schemaQuery.isLoading) {
         return <div className="empty compact"><h3>Loading schema</h3></div>
@@ -81,14 +82,17 @@ export function DynamicResourceView({cloud, service}: DynamicResourceViewProps) 
 
     const schema = schemaQuery.data
     const resources = resourcesQuery.data ?? []
-    const runtimeState = statusQuery.isLoading
+    const runtimeState = statusLoading
         ? 'Checking runtime'
-        : statusQuery.data?.runtime === 'reachable'
+        : cloudStatus?.runtime === 'reachable'
             ? 'Runtime reachable'
-            : statusQuery.data?.runtime === 'unavailable'
+            : cloudStatus?.runtime === 'unavailable'
                 ? 'Runtime unavailable'
                 : 'Coming soon'
-    const runtimeClass = statusQuery.data?.runtime === 'unavailable' ? 'unavailable' : 'ready'
+    const runtimeClass = cloudStatus?.runtime === 'unavailable' ? 'unavailable' : cloudStatus?.runtime === 'reachable' ? 'ready' : 'pending'
+    const adapterState = cloudStatus?.adapterRegistered ? 'Adapter ready' : 'Adapter pending'
+    const resourceState = resourceStateFor(cloudStatus, statusLoading, resourcesQuery.isLoading, resourcesQuery.isError)
+    const canUseRuntime = cloudStatus?.runtime === 'reachable'
 
     return (
         <div className="dynamic-resource-view">
@@ -100,6 +104,8 @@ export function DynamicResourceView({cloud, service}: DynamicResourceViewProps) 
                     </div>
                     <div className="schema-action-list">
                         <span className={`runtime-state ${runtimeClass}`}>{runtimeState}</span>
+                        <span className={`runtime-state ${cloudStatus?.adapterRegistered ? 'ready' : 'pending'}`}>{adapterState}</span>
+                        <span className={`runtime-state ${resourceState.className}`}>{resourceState.label}</span>
                         <span className="schema-action resource-count">{resources.length} resources</span>
                     </div>
                 </div>
@@ -122,14 +128,14 @@ export function DynamicResourceView({cloud, service}: DynamicResourceViewProps) 
                             </div>
                             <div className="resource-table-tools">
                                 <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter resources"/>
-                                <button className="button" type="button" onClick={() => setCreateOpen((open) => !open)}>
+                                <button className="button" type="button" disabled={!canUseRuntime} onClick={() => setCreateOpen((open) => !open)}>
                                     <Plus size={14}/>
                                     Create
                                     {createOpen ? <ChevronUp size={13}/> : <ChevronDown size={13}/>}
                                 </button>
-                                <button className="button" type="button" onClick={() => resourcesQuery.refetch()}>
+                                <button className="button" type="button" disabled={!canUseRuntime || resourcesQuery.isFetching} onClick={() => resourcesQuery.refetch()}>
                                     <RefreshCw size={14}/>
-                                    Refresh
+                                    {resourcesQuery.isFetching ? 'Loading' : 'Refresh'}
                                 </button>
                             </div>
                         </div>
@@ -138,24 +144,28 @@ export function DynamicResourceView({cloud, service}: DynamicResourceViewProps) 
                                 <DynamicFormRenderer schema={schema} isSubmitting={createMut.isPending} onSubmit={(values) => createMut.mutate(values)}/>
                             </div>
                         )}
-                        <ResourceTable
-                            schema={schema}
-                            resources={resources}
-                            selectedId={selected?.id}
-                            deletingId={deleteMut.variables?.id}
-                            onSelect={setSelected}
-                            onDelete={(resource) => deleteMut.mutate(resource)}
-                        />
+                        {renderResourceSurface({
+                            schema,
+                            resources,
+                            selectedId: selected?.id,
+                            deletingId: deleteMut.variables?.id,
+                            cloudStatus,
+                            statusLoading,
+                            resourcesLoading: resourcesQuery.isLoading,
+                            resourcesError: resourcesQuery.error,
+                            onSelect: setSelected,
+                            onDelete: (resource) => deleteMut.mutate(resource),
+                        })}
                     </section>
                 </section>
-                <ResourceInspector resource={selected}/>
+                <ResourceInspector resource={selected} object={selectedObject}/>
             </div>
-            <StorageObjectBrowser cloud={cloud} resource={selected}/>
+            <StorageObjectBrowser cloud={cloud} resource={selected} selectedObjectKey={selectedObject?.key} onSelectObject={setSelectedObject}/>
         </div>
     )
 }
 
-function FeatureTile({icon, title, value, detail}: {icon: React.ElementType; title: string; value: string; detail: string}) {
+function FeatureTile({icon, title, value, detail}: {icon: ElementType; title: string; value: string; detail: string}) {
     const Icon = icon
     return (
         <div className="feature-tile">
@@ -172,6 +182,92 @@ function StatusTile({label, value, state}: {label: string; value: string; state:
         <div className={`status-tile ${state}`}>
             <span>{label}</span>
             <strong>{value}</strong>
+        </div>
+    )
+}
+
+function resourceStateFor(
+    status: CloudStatus | undefined,
+    statusLoading: boolean,
+    resourcesLoading: boolean,
+    resourcesError: boolean,
+): {label: string; className: 'ready' | 'pending' | 'unavailable'} {
+    if (statusLoading) return {label: 'Checking resources', className: 'pending'}
+    if (status?.runtime === 'unavailable') return {label: 'Resources blocked', className: 'unavailable'}
+    if (status?.runtime === 'coming_soon') return {label: 'Resources pending', className: 'pending'}
+    if (resourcesLoading) return {label: 'Loading resources', className: 'pending'}
+    if (resourcesError) return {label: 'Resource error', className: 'unavailable'}
+    return {label: 'Resources loaded', className: 'ready'}
+}
+
+function renderResourceSurface({
+    schema,
+    resources,
+    selectedId,
+    deletingId,
+    cloudStatus,
+    statusLoading,
+    resourcesLoading,
+    resourcesError,
+    onSelect,
+    onDelete,
+}: {
+    schema: ServiceSchema
+    resources: CloudResource[]
+    selectedId?: string
+    deletingId?: string
+    cloudStatus?: CloudStatus
+    statusLoading: boolean
+    resourcesLoading: boolean
+    resourcesError: unknown
+    onSelect: (resource: CloudResource) => void
+    onDelete: (resource: CloudResource) => void
+}) {
+    if (statusLoading) {
+        return <RuntimeNotice title="Checking runtime" detail="Waiting for the proxy to confirm the selected cloud runtime." state="pending"/>
+    }
+    if (cloudStatus?.runtime === 'unavailable') {
+        return (
+            <RuntimeNotice
+                title="Runtime unavailable"
+                detail={`${cloudStatus.endpoint ?? 'Runtime endpoint'} is not reachable. Start the selected runtime before loading resources.`}
+                error={cloudStatus.error ?? undefined}
+                state="unavailable"
+            />
+        )
+    }
+    if (resourcesError) {
+        return (
+            <RuntimeNotice
+                title="Resource load failed"
+                detail="The adapter is registered, but the proxy could not load resources from the selected runtime."
+                error={resourcesError instanceof Error ? resourcesError.message : 'Unknown resource error'}
+                state="unavailable"
+            />
+        )
+    }
+    if (resourcesLoading) {
+        return <RuntimeNotice title="Loading resources" detail="Reading normalized resources from the selected cloud adapter." state="pending"/>
+    }
+
+    return (
+        <ResourceTable
+            schema={schema}
+            resources={resources}
+            selectedId={selectedId}
+            deletingId={deletingId}
+            onSelect={onSelect}
+            onDelete={onDelete}
+        />
+    )
+}
+
+function RuntimeNotice({title, detail, error, state}: {title: string; detail: string; error?: string; state: 'pending' | 'unavailable'}) {
+    return (
+        <div className={`runtime-notice ${state}`}>
+            <h3>{title}</h3>
+            <p>{detail}</p>
+            {error && <code>{error}</code>}
         </div>
     )
 }

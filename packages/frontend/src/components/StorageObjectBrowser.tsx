@@ -8,13 +8,16 @@ import type {CloudResource, StorageObject} from '@/types/resource'
 interface StorageObjectBrowserProps {
     cloud: CloudProvider
     resource?: CloudResource
+    selectedObjectKey?: string
+    onSelectObject: (object?: StorageObject) => void
 }
 
-export function StorageObjectBrowser({cloud, resource}: StorageObjectBrowserProps) {
+export function StorageObjectBrowser({cloud, resource, selectedObjectKey, onSelectObject}: StorageObjectBrowserProps) {
     const qc = useQueryClient()
     const fileRef = useRef<HTMLInputElement | null>(null)
     const [prefix, setPrefix] = useState('')
     const [uploadPrefix, setUploadPrefix] = useState('')
+    const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
 
     const query = useQuery({
         queryKey: ['storage-objects', cloud, resource?.id, prefix],
@@ -49,6 +52,7 @@ export function StorageObjectBrowser({cloud, resource}: StorageObjectBrowserProp
     }
 
     const objects = query.data?.objects ?? []
+    const error = query.error ?? uploadMut.error ?? deleteMut.error
 
     return (
         <section className="object-browser">
@@ -67,19 +71,30 @@ export function StorageObjectBrowser({cloud, resource}: StorageObjectBrowserProp
                     }}/>
                     <button className="button" type="button" onClick={() => fileRef.current?.click()}>
                         <Upload size={14}/>
-                        Upload
+                        {uploadMut.isPending ? 'Uploading' : 'Upload'}
                     </button>
-                    <button className="button" type="button" onClick={() => query.refetch()}>
+                    <button className="button" type="button" disabled={query.isFetching} onClick={() => query.refetch()}>
                         <RefreshCw size={14}/>
-                        Refresh
+                        {query.isFetching ? 'Loading' : 'Refresh'}
                     </button>
                 </div>
             </div>
 
-            {objects.length === 0 ? (
+            {error && (
+                <div className="inline-error">
+                    {error instanceof Error ? error.message : 'Storage operation failed'}
+                </div>
+            )}
+
+            {query.isLoading ? (
+                <div className="empty compact">
+                    <h3>Loading objects</h3>
+                    <p>Reading objects from the selected storage resource.</p>
+                </div>
+            ) : objects.length === 0 ? (
                 <div className="empty compact">
                     <h3>No objects</h3>
-                    <p>This prefix did not return objects or blobs.</p>
+                    <p>{prefix ? 'This prefix is empty.' : 'This storage resource has no objects yet.'}</p>
                 </div>
             ) : (
                 <table className="table object-table">
@@ -94,8 +109,15 @@ export function StorageObjectBrowser({cloud, resource}: StorageObjectBrowserProp
                     </thead>
                     <tbody>
                         {objects.map((object) => (
-                            <tr key={object.key}>
-                                <td onClick={() => object.type === 'folder' && setPrefix(object.key)}>
+                            <tr key={object.key} className={selectedObjectKey === object.key ? 'selected' : ''}>
+                                <td onClick={() => {
+                                    if (object.type === 'folder') {
+                                        setPrefix(object.key)
+                                        onSelectObject(undefined)
+                                    } else {
+                                        onSelectObject(object)
+                                    }
+                                }}>
                                     <span className="object-name">
                                         {object.type === 'folder' ? <Folder size={14}/> : <File size={14}/>}
                                         {object.name}
@@ -110,9 +132,19 @@ export function StorageObjectBrowser({cloud, resource}: StorageObjectBrowserProp
                                             <a className="icon-btn" href={storageObjectDownloadUrl(cloud, resource.id, object.key)} title={`Download ${object.name}`}>
                                                 <Download size={13}/>
                                             </a>
-                                            <button className="icon-btn danger" title={`Delete ${object.name}`} onClick={() => deleteMut.mutate(object)}>
-                                                <Trash2 size={13}/>
-                                            </button>
+                                            {deleteConfirm === object.key ? (
+                                                <button className="button danger compact" disabled={deleteMut.isPending} onClick={() => {
+                                                    deleteMut.mutate(object)
+                                                    setDeleteConfirm(null)
+                                                    onSelectObject(undefined)
+                                                }}>
+                                                    Confirm
+                                                </button>
+                                            ) : (
+                                                <button className="icon-btn danger" title={`Delete ${object.name}`} onClick={() => setDeleteConfirm(object.key)}>
+                                                    <Trash2 size={13}/>
+                                                </button>
+                                            )}
                                         </>
                                     )}
                                 </td>

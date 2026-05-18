@@ -1,4 +1,5 @@
 import {Hono} from 'hono'
+import type {Context} from 'hono'
 import type {CloudProvider, CloudServiceType} from '../cloud-spi/types'
 import {createCloudProxyService} from '../cloudProxy'
 import {CloudProxyService} from '../service/CloudProxyService'
@@ -38,8 +39,10 @@ export function createCloudRoutes(service: CloudProxyService = createCloudProxyS
         const serviceType = c.req.param('service') as CloudServiceType
         if (!isCloudProvider(cloud) || !isServiceType(serviceType)) return c.json({error: 'Unknown cloud or service'}, 404)
 
-        const resources = await service.listResources(cloud, serviceType, {search: c.req.query('search')})
-        return c.json(resources)
+        return withRuntime(c, async () => {
+            const resources = await service.listResources(cloud, serviceType, {search: c.req.query('search')})
+            return c.json(resources)
+        })
     })
 
     app.get('/:cloud/services/:service/resources/:id', async (c) => {
@@ -47,9 +50,11 @@ export function createCloudRoutes(service: CloudProxyService = createCloudProxyS
         const serviceType = c.req.param('service') as CloudServiceType
         if (!isCloudProvider(cloud) || !isServiceType(serviceType)) return c.json({error: 'Unknown cloud or service'}, 404)
 
-        const resource = await service.getResource(cloud, serviceType, c.req.param('id'))
-        if (!resource) return c.json({error: 'Resource not found'}, 404)
-        return c.json(resource)
+        return withRuntime(c, async () => {
+            const resource = await service.getResource(cloud, serviceType, c.req.param('id'))
+            if (!resource) return c.json({error: 'Resource not found'}, 404)
+            return c.json(resource)
+        })
     })
 
     app.get('/:cloud/services/:service/resources/:id/objects', async (c) => {
@@ -57,8 +62,10 @@ export function createCloudRoutes(service: CloudProxyService = createCloudProxyS
         const serviceType = c.req.param('service') as CloudServiceType
         if (!isCloudProvider(cloud) || !isServiceType(serviceType)) return c.json({error: 'Unknown cloud or service'}, 404)
 
-        const objects = await service.listObjects(cloud, serviceType, c.req.param('id'), c.req.query('prefix') ?? '')
-        return c.json(objects)
+        return withRuntime(c, async () => {
+            const objects = await service.listObjects(cloud, serviceType, c.req.param('id'), c.req.query('prefix') ?? '')
+            return c.json(objects)
+        })
     })
 
     app.put('/:cloud/services/:service/resources/:id/object', async (c) => {
@@ -70,8 +77,10 @@ export function createCloudRoutes(service: CloudProxyService = createCloudProxyS
         if (!key) return c.json({error: 'Object key is required'}, 400)
         const body = new Uint8Array(await c.req.arrayBuffer())
         const contentType = c.req.header('content-type') ?? 'application/octet-stream'
-        await service.putObject(cloud, serviceType, c.req.param('id'), key, body, contentType)
-        return c.json({ok: true})
+        return withRuntime(c, async () => {
+            await service.putObject(cloud, serviceType, c.req.param('id'), key, body, contentType)
+            return c.json({ok: true})
+        })
     })
 
     app.get('/:cloud/services/:service/resources/:id/object', async (c) => {
@@ -81,13 +90,15 @@ export function createCloudRoutes(service: CloudProxyService = createCloudProxyS
 
         const key = c.req.query('key') ?? ''
         if (!key) return c.json({error: 'Object key is required'}, 400)
-        const object = await service.getObject(cloud, serviceType, c.req.param('id'), key)
-        return new Response(object.body, {
-            headers: {
-                'content-type': object.contentType,
-                ...(object.contentLength === null ? {} : {'content-length': String(object.contentLength)}),
-                'content-disposition': `attachment; filename="${key.split('/').pop() ?? key}"`,
-            },
+        return withRuntime(c, async () => {
+            const object = await service.getObject(cloud, serviceType, c.req.param('id'), key)
+            return new Response(object.body, {
+                headers: {
+                    'content-type': object.contentType,
+                    ...(object.contentLength === null ? {} : {'content-length': String(object.contentLength)}),
+                    'content-disposition': `attachment; filename="${key.split('/').pop() ?? key}"`,
+                },
+            })
         })
     })
 
@@ -98,8 +109,10 @@ export function createCloudRoutes(service: CloudProxyService = createCloudProxyS
 
         const key = c.req.query('key') ?? ''
         if (!key) return c.json({error: 'Object key is required'}, 400)
-        await service.deleteObject(cloud, serviceType, c.req.param('id'), key)
-        return c.json({ok: true})
+        return withRuntime(c, async () => {
+            await service.deleteObject(cloud, serviceType, c.req.param('id'), key)
+            return c.json({ok: true})
+        })
     })
 
     app.post('/:cloud/services/:service/resources', async (c) => {
@@ -107,9 +120,11 @@ export function createCloudRoutes(service: CloudProxyService = createCloudProxyS
         const serviceType = c.req.param('service') as CloudServiceType
         if (!isCloudProvider(cloud) || !isServiceType(serviceType)) return c.json({error: 'Unknown cloud or service'}, 404)
 
-        const values = await c.req.json<Record<string, unknown>>()
-        const resource = await service.createResource(cloud, serviceType, {values})
-        return c.json(resource, 201)
+        return withRuntime(c, async () => {
+            const values = await c.req.json<Record<string, unknown>>()
+            const resource = await service.createResource(cloud, serviceType, {values})
+            return c.json(resource, 201)
+        })
     })
 
     app.delete('/:cloud/services/:service/resources/:id', async (c) => {
@@ -117,8 +132,10 @@ export function createCloudRoutes(service: CloudProxyService = createCloudProxyS
         const serviceType = c.req.param('service') as CloudServiceType
         if (!isCloudProvider(cloud) || !isServiceType(serviceType)) return c.json({error: 'Unknown cloud or service'}, 404)
 
-        await service.deleteResource(cloud, serviceType, c.req.param('id'))
-        return c.json({ok: true})
+        return withRuntime(c, async () => {
+            await service.deleteResource(cloud, serviceType, c.req.param('id'))
+            return c.json({ok: true})
+        })
     })
 
     return app
@@ -130,6 +147,15 @@ function isCloudProvider(value: string): value is CloudProvider {
 
 function isServiceType(value: string): value is CloudServiceType {
     return value === 'storage'
+}
+
+async function withRuntime(c: Context, handler: () => Promise<Response>): Promise<Response> {
+    try {
+        return await handler()
+    } catch (err) {
+        const message = err instanceof Error ? err.message : 'Runtime request failed'
+        return c.json({error: message}, 502)
+    }
 }
 
 export default createCloudRoutes()
