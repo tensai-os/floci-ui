@@ -3,6 +3,7 @@ import {type FlociRequestEvent, subscribeRequests} from '@/api/floci-client'
 import {createLogGroup, createLogStream, putLogEvents} from '@/api/services'
 
 const FLUSH_INTERVAL_MS = 5_000
+const FAILURE_BACKOFF_MS = 30_000
 // Services whose calls we must NEVER forward to CloudWatch (would cause infinite loop)
 const SKIP_SERVICES = new Set(['cloudwatch', 'health'])
 
@@ -20,11 +21,13 @@ export function useCloudWatchIngestor() {
     const knownGroupsRef = useRef<Set<string>>(new Set())
     const knownStreamsRef = useRef<Set<string>>(new Set())
     const flushingRef = useRef(false)
+    const disabledUntilRef = useRef(0)
 
     useEffect(() => {
         // Subscribe to all Floci HTTP events
         const unsub = subscribeRequests((event) => {
             if (SKIP_SERVICES.has(event.service)) return
+            if (Date.now() < disabledUntilRef.current) return
             const groupName = `/floci/${event.service}`
             const buf = bufferRef.current
             const existing = buf.get(groupName)
@@ -36,7 +39,7 @@ export function useCloudWatchIngestor() {
         })
 
         const timer = setInterval(() => {
-            void flush(bufferRef.current, knownGroupsRef.current, knownStreamsRef.current, flushingRef)
+            void flush(bufferRef.current, knownGroupsRef.current, knownStreamsRef.current, flushingRef, disabledUntilRef)
         }, FLUSH_INTERVAL_MS)
 
         return () => {
@@ -51,8 +54,9 @@ async function flush(
     knownGroups: Set<string>,
     knownStreams: Set<string>,
     flushingRef: React.MutableRefObject<boolean>,
+    disabledUntilRef: React.MutableRefObject<number>,
 ) {
-    if (flushingRef.current || buffer.size === 0) return
+    if (flushingRef.current || buffer.size === 0 || Date.now() < disabledUntilRef.current) return
     flushingRef.current = true
 
     // Snapshot and clear immediately so new events keep accumulating
@@ -65,10 +69,12 @@ async function flush(
             if (!knownGroups.has(groupName)) {
                 try {
                     await createLogGroup(groupName)
-                } catch {
-                    // ResourceAlreadyExistsException → fine
+                    knownGroups.add(groupName)
+                } catch (err) {
+                    disabledUntilRef.current = Date.now() + FAILURE_BACKOFF_MS
+                    console.warn('[CloudWatch Ingestor] disabled temporarily; log group creation failed', err)
+                    continue
                 }
-                knownGroups.add(groupName)
             }
 
             // One stream per calendar day
@@ -78,10 +84,12 @@ async function flush(
             if (!knownStreams.has(streamKey)) {
                 try {
                     await createLogStream(groupName, streamName)
-                } catch {
-                    // ResourceAlreadyExistsException → fine
+                    knownStreams.add(streamKey)
+                } catch (err) {
+                    disabledUntilRef.current = Date.now() + FAILURE_BACKOFF_MS
+                    console.warn('[CloudWatch Ingestor] disabled temporarily; log stream creation failed', err)
+                    continue
                 }
-                knownStreams.add(streamKey)
             }
 
             const logEvents = events.map((ev) => ({
@@ -97,6 +105,7 @@ async function flush(
             try {
                 await putLogEvents(groupName, streamName, logEvents)
             } catch (err) {
+                disabledUntilRef.current = Date.now() + FAILURE_BACKOFF_MS
                 console.warn('[CloudWatch Ingestor] putLogEvents failed for', groupName, err)
             }
         }

@@ -111,7 +111,7 @@ app.get('/queue/attributes', async (c) => {
         QueueUrl: url,
         AttributeNames: ['All'],
     }))
-    const a = res.Attributes ?? {}
+    const a: Record<string, string> = {...(res.Attributes ?? {})}
     const toInt = (k: string) => a[k] !== undefined ? Number(a[k]) : undefined
     return c.json({
         approximateNumberOfMessages: toInt('ApproximateNumberOfMessages'),

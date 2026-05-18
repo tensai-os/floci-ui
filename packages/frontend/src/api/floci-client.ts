@@ -33,12 +33,25 @@ async function apiFetch<T>(path: string, service: string, init: RequestInit, sig
             throw new FlociError(`Cannot reach floci-api: ${message}`, undefined, path)
         })
         statusCode = res.status
-        if (!res.ok) throw new FlociError(`HTTP ${res.status}`, res.status, path)
+        if (!res.ok) throw new FlociError(await errorMessage(res), res.status, path)
         return res.json() as Promise<T>
     } finally {
         if (statusCode > 0) {
             emitRequest({service, method: init.method ?? 'GET', path, statusCode, latencyMs: Math.round(performance.now() - started), timestamp: Date.now()})
         }
+    }
+}
+
+async function errorMessage(res: Response): Promise<string> {
+    const fallback = `HTTP ${res.status}`
+    const contentType = res.headers.get('content-type') ?? ''
+    if (!contentType.includes('application/json')) return fallback
+
+    try {
+        const body = await res.json() as {error?: unknown}
+        return typeof body.error === 'string' && body.error.trim() ? body.error : fallback
+    } catch {
+        return fallback
     }
 }
 

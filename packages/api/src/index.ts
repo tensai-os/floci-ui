@@ -9,6 +9,7 @@ import sns from './routes/sns'
 import lambda from './routes/lambda'
 import dynamodb from './routes/dynamodb'
 import cloudwatch from './routes/cloudwatch'
+import clouds from './routes/clouds'
 
 const app = new Hono()
 
@@ -22,6 +23,7 @@ app.route('/api/sns', sns)
 app.route('/api/lambda', lambda)
 app.route('/api/dynamodb', dynamodb)
 app.route('/api/cloudwatch', cloudwatch)
+app.route('/api/clouds', clouds)
 
 // Serve static frontend files when public/ directory is present (production)
 app.use('*', serveStatic({root: './public'}))

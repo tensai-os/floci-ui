@@ -1,4 +1,4 @@
-import {NavLink, Outlet} from 'react-router-dom'
+import {NavLink, Outlet, useLocation} from 'react-router-dom'
 import {
     AreaChart,
     Bell,
@@ -12,6 +12,7 @@ import {
     Search,
     Shield,
     SlidersHorizontal,
+    Timer,
     Sun,
     Table2,
     Users,
@@ -52,7 +53,54 @@ function NavItem({to, icon, label}: { to: string; icon: React.ElementType; label
     )
 }
 
+const CLOUD_SERVICE_ICONS = {
+    storage: Database,
+    queue: MessageSquare,
+    function: Zap,
+    database: Table2,
+} satisfies Record<string, React.ElementType>
+
+type CloudSidebarService = keyof typeof CLOUD_SERVICE_ICONS
+
+const CLOUD_SERVICE_PLACEHOLDERS: Array<{name: CloudSidebarService; label: string}> = [
+    {name: 'queue', label: 'Queue'},
+    {name: 'function', label: 'Function'},
+    {name: 'database', label: 'Database'},
+]
+
+function CloudServiceNav() {
+    const location = useLocation()
+    const cloud = activeCloudFromPath(location.pathname)
+    const cloudLabel = cloud.toUpperCase()
+    const storageLabel = cloud === 'aws' ? 'S3 Storage' : cloud === 'azure' ? 'Blob Storage' : 'Storage'
+
+    return (
+        <div className="nav-section cloud-service-nav">
+            <span className="nav-label">Cloud Services · {cloudLabel}</span>
+            <NavItem to={`/cloud-explorer/${cloud}/storage`} icon={CLOUD_SERVICE_ICONS.storage} label={storageLabel}/>
+            {CLOUD_SERVICE_PLACEHOLDERS.map((service) => {
+                const Icon = CLOUD_SERVICE_ICONS[service.name]
+                return (
+                    <div key={service.name} className="nav-link disabled">
+                        <Icon size={14}/>
+                        <span>{service.label}</span>
+                        <span className="nav-soon">Soon</span>
+                    </div>
+                )
+            })}
+            {cloud === 'gcp' && (
+                <div className="nav-hint">
+                    <Timer size={13}/>
+                    <span>GCP adapter coming soon</span>
+                </div>
+            )}
+        </div>
+    )
+}
+
 export function Layout() {
+    const location = useLocation()
+    const activeCloud = activeCloudFromPath(location.pathname)
     const {theme, toggle} = useTheme()
     const {data, isError} = useQuery({
         queryKey: ['health'],
@@ -82,10 +130,11 @@ export function Layout() {
                 <nav className="nav">
                     <div className="nav-section">
                         <span className="nav-label">General</span>
-                        <NavItem to="/dashboard" icon={ICONS.dashboard} label="Console Home"/>
+                        <NavItem to={`/console/${activeCloud}`} icon={ICONS.dashboard} label="Console Home"/>
                     </div>
+                    <CloudServiceNav/>
                     <div className="nav-section">
-                        <span className="nav-label">Services</span>
+                        <span className="nav-label">Legacy AWS Services</span>
                         {SERVICE_META.map((service) => (
                             <NavItem key={service.name} to={service.route} icon={ICONS[service.name]}
                                      label={service.displayName}/>
@@ -118,4 +167,9 @@ export function Layout() {
             </div>
         </div>
     )
+}
+
+function activeCloudFromPath(pathname: string): 'aws' | 'azure' | 'gcp' {
+    const match = pathname.match(/^\/(?:cloud-explorer|console)\/(aws|azure|gcp)(?:\/|$)/)
+    return (match?.[1] ?? 'aws') as 'aws' | 'azure' | 'gcp'
 }
