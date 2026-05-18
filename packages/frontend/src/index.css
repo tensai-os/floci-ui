@@ -1318,6 +1318,48 @@ pre,
     gap: 14px;
 }
 
+.console-provider-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: 4px;
+    background: var(--elevated);
+    padding: 16px;
+}
+
+.console-provider-banner.ready {
+    border-left-color: #22c55e;
+}
+
+.console-provider-banner.pending {
+    border-left-color: #f59e0b;
+}
+
+.console-provider-banner.unavailable {
+    border-left-color: #ef4444;
+}
+
+.console-provider-banner h3 {
+    margin: 2px 0 4px;
+    color: var(--text-bright);
+    font-size: 20px;
+}
+
+.console-provider-banner p {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 13px;
+}
+
+.console-provider-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex: 0 0 auto;
+}
+
 .console-summary {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1328,11 +1370,34 @@ pre,
 }
 
 .summary-tile {
+    position: relative;
     display: grid;
     gap: 4px;
     min-height: 82px;
     border-right: 1px solid var(--border);
     padding: 14px 16px;
+}
+
+.summary-tile svg {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    color: var(--link);
+}
+
+.summary-tile.ready svg,
+.summary-tile.ready strong {
+    color: #4ade80;
+}
+
+.summary-tile.pending svg,
+.summary-tile.pending strong {
+    color: #fbbf24;
+}
+
+.summary-tile.unavailable svg,
+.summary-tile.unavailable strong {
+    color: #f87171;
 }
 
 .summary-tile:last-child {
@@ -1356,6 +1421,73 @@ pre,
 .summary-tile small {
     color: var(--text-3);
     font-size: 11px;
+    line-height: 1.35;
+}
+
+.console-runtime-flow {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--elevated);
+    overflow: hidden;
+}
+
+.console-flow-step {
+    position: relative;
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr);
+    grid-template-areas:
+        "icon label"
+        "icon value";
+    gap: 2px 8px;
+    align-content: center;
+    min-height: 58px;
+    border-right: 1px solid var(--border);
+    padding: 10px 14px;
+}
+
+.console-flow-step:last-child {
+    border-right: 0;
+}
+
+.console-flow-step:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    right: -5px;
+    top: 50%;
+    z-index: 1;
+    width: 9px;
+    height: 9px;
+    border-top: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    background: var(--elevated);
+    transform: translateY(-50%) rotate(45deg);
+}
+
+.console-flow-step svg {
+    grid-area: icon;
+    align-self: center;
+    color: var(--link);
+}
+
+.console-flow-step span {
+    grid-area: label;
+    color: var(--text-2);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.console-flow-step strong {
+    grid-area: value;
+    overflow: hidden;
+    color: var(--text-bright);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .console-service-grid {
@@ -1372,6 +1504,10 @@ pre,
 button.console-service-card {
     width: 100%;
     cursor: pointer;
+}
+
+.console-service-card.blocked {
+    opacity: 0.9;
 }
 
 .console-service-meta {

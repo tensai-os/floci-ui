@@ -1,4 +1,5 @@
 import {azureStorageSchema} from '../cloud-spi/storageSchema'
+import {azure, type AzureRuntimeClient} from '../azure'
 import type {
     CloudResource,
     CloudServiceAdapter,
@@ -9,22 +10,18 @@ import type {
     StorageObjectList,
 } from '../cloud-spi/types'
 
-export interface AzureEndpointProperties {
-    endpoint: string
-}
-
 export class AzureStorageAdapter implements CloudServiceAdapter {
     readonly cloud = 'azure' as const
     readonly service = 'storage' as const
 
-    constructor(private readonly props: AzureEndpointProperties) {}
+    constructor(private readonly client: AzureRuntimeClient = azure) {}
 
     schema(): ServiceSchema {
         return azureStorageSchema()
     }
 
     async list(query: ResourceQuery = {}): Promise<CloudResource[]> {
-        const res = await this.azureFetch('/?comp=list', {method: 'GET'}, {emptyOnNotFound: true})
+        const res = await this.client.fetch('/?comp=list', {method: 'GET'}, {emptyOnNotFound: true})
         if (!res) return []
 
         const xml = await res.text()
@@ -43,18 +40,18 @@ export class AzureStorageAdapter implements CloudServiceAdapter {
             throw new Error('Use a valid Azure container name: 3-63 lowercase letters, numbers, or single hyphens.')
         }
 
-        await this.azureFetch(`/${encodeURIComponent(containerName)}?restype=container`, {method: 'PUT'})
+        await this.client.fetch(`/${encodeURIComponent(containerName)}?restype=container`, {method: 'PUT'})
         return normalizeContainer(containerName, null)
     }
 
     async delete(id: string): Promise<void> {
-        await this.azureFetch(`/${encodeURIComponent(id)}?restype=container`, {method: 'DELETE'})
+        await this.client.fetch(`/${encodeURIComponent(id)}?restype=container`, {method: 'DELETE'})
     }
 
     async listObjects(resourceId: string, prefix = ''): Promise<StorageObjectList> {
         const qs = new URLSearchParams({restype: 'container', comp: 'list', delimiter: '/'})
         if (prefix) qs.set('prefix', prefix)
-        const res = await this.azureFetch(`/${encodeURIComponent(resourceId)}?${qs}`, {method: 'GET'}, {emptyOnNotFound: true})
+        const res = await this.client.fetch(`/${encodeURIComponent(resourceId)}?${qs}`, {method: 'GET'}, {emptyOnNotFound: true})
         if (!res) return {prefix, objects: []}
 
         const xml = await res.text()
@@ -62,7 +59,7 @@ export class AzureStorageAdapter implements CloudServiceAdapter {
     }
 
     async putObject(resourceId: string, key: string, body: Uint8Array, contentType: string): Promise<void> {
-        await this.azureFetch(`/${encodeURIComponent(resourceId)}/${encodePath(key)}`, {
+        await this.client.fetch(`/${encodeURIComponent(resourceId)}/${encodePath(key)}`, {
             method: 'PUT',
             body: copyBytes(body),
             headers: {
@@ -73,7 +70,7 @@ export class AzureStorageAdapter implements CloudServiceAdapter {
     }
 
     async getObject(resourceId: string, key: string): Promise<StorageObjectDownload> {
-        const res = await this.azureFetch(`/${encodeURIComponent(resourceId)}/${encodePath(key)}`, {method: 'GET'})
+        const res = await this.client.fetch(`/${encodeURIComponent(resourceId)}/${encodePath(key)}`, {method: 'GET'})
         if (!res) throw new Error('Azure blob not found')
         return {
             body: await res.arrayBuffer(),
@@ -83,25 +80,7 @@ export class AzureStorageAdapter implements CloudServiceAdapter {
     }
 
     async deleteObject(resourceId: string, key: string): Promise<void> {
-        await this.azureFetch(`/${encodeURIComponent(resourceId)}/${encodePath(key)}`, {method: 'DELETE'})
-    }
-
-    private async azureFetch(path: string, init: RequestInit, options: {emptyOnNotFound?: boolean} = {}): Promise<Response | null> {
-        const res = await fetch(`${this.props.endpoint}${path}`, {
-            ...init,
-            headers: {
-                'x-ms-version': '2021-12-02',
-                ...(init.headers ?? {}),
-            },
-        })
-
-        if (options.emptyOnNotFound && res.status === 404) return null
-
-        if (!res.ok) {
-            throw new Error(`Azure Blob request failed: HTTP ${res.status}`)
-        }
-
-        return res
+        await this.client.fetch(`/${encodeURIComponent(resourceId)}/${encodePath(key)}`, {method: 'DELETE'})
     }
 }
 

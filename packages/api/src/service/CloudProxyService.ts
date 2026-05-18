@@ -13,6 +13,7 @@ import type {
 } from '../cloud-spi/types'
 import {storageSchemaFor} from '../cloud-spi/storageSchema'
 import {CloudAdapterRegistry} from '../registry/CloudAdapterRegistry'
+import {azureEndpoint} from '../azure'
 
 export class CloudProxyService {
     constructor(private readonly registry: CloudAdapterRegistry) {}
@@ -128,6 +129,6 @@ export class CloudProxyService {
 
 function endpointFor(cloud: CloudProvider): string | null {
     if (cloud === 'aws') return process.env.FLOCI_ENDPOINT ?? 'http://localhost:4566'
-    if (cloud === 'azure') return process.env.FLOCI_AZURE_ENDPOINT ?? process.env.FLOCI_AZ_ENDPOINT ?? 'http://localhost:4577'
+    if (cloud === 'azure') return azureEndpoint()
     return null
 }
