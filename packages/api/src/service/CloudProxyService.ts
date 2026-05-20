@@ -28,38 +28,41 @@ export class CloudProxyService {
     }
 
     services(cloud: CloudProvider): CloudServiceDescriptor[] {
-        if (cloud === 'gcp') {
-            return [{cloud, service: 'storage', displayName: 'Storage Coming Soon', availability: 'coming_soon'},
-                  {cloud, service: 'serverless', displayName: 'Cloud Functions', availability: 'coming_soon'},
-            ]
-        }
 
-        return [{
+        const services: CloudServiceDescriptor[] = [{
             cloud,
             service: 'storage',
-            displayName: cloud === 'aws' ? 'S3 Storage' : 'Azure Blob Storage',
+            displayName: 'Storage',
             availability: this.registry.get(cloud, 'storage') ? 'available' : 'coming_soon',
-        },
-        {
-        cloud,
-        service: 'serverless',
-        displayName: cloud === 'aws' ? 'AWS Lambda' : 'Azure Functions',
-        availability: 'available',
-    },
-]
+        }]
+
+        services.push({
+            cloud,
+            service: 'k8s',
+            displayName: 'k8s Engine',
+            availability: this.registry.get(cloud, 'k8s') ? 'available' : 'coming_soon',
+        })
+        services.push({
+            cloud,
+            service: 'database',
+            displayName: 'Database',
+            availability: this.registry.get(cloud, 'database') ? 'available' : 'coming_soon',
+        })
+        services.push({
+            cloud,
+            service: 'serverless',
+            displayName: 'Serverless',
+            availability: this.registry.get(cloud, 'serverless') ? 'available' : 'coming_soon',
+        })
+        return services
     }
 
     schema(cloud: CloudProvider, service: CloudServiceType): ServiceSchema | null {
-    const adapter = this.registry.get(cloud, service)
-
-    if (adapter) return adapter.schema()
-
-    if (service === 'serverless') {
-        return serverlessSchemaFor(cloud)
+        const adapter = this.registry.get(cloud, service)
+        if (adapter) return adapter.schema()
+        if (service === 'storage') return storageSchemaFor(cloud)
+        return null
     }
-
-    return storageSchemaFor(cloud)
-}
 
     async status(cloud: CloudProvider): Promise<CloudStatus> {
         const adapter = this.registry.get(cloud, 'storage')

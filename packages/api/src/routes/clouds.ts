@@ -160,7 +160,8 @@ function isCloudProvider(value: string): value is CloudProvider {
 }
 
 function isServiceType(value: string): value is CloudServiceType {
-    return value === 'storage' || value === 'serverless'
+    return value === 'storage' || value === 'k8s' || value === 'database' || value === 'serverless'
+
 }
 
 async function withRuntime(c: Context, handler: () => Promise<Response>): Promise<Response> {

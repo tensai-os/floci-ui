@@ -70,6 +70,12 @@ export function DynamicResourceView({cloud, service, cloudStatus, statusLoading 
         setSelectedObject(undefined)
     }, [selected?.id])
 
+    useEffect(() => {
+        setSelected(undefined)
+        setSelectedObject(undefined)
+        setCreateOpen(false)
+    }, [cloud, service])
+
     if (schemaQuery.isLoading) {
         return <div className="empty compact"><h3>Loading schema</h3></div>
     }
@@ -94,6 +100,7 @@ export function DynamicResourceView({cloud, service, cloudStatus, statusLoading 
 
     const schema = schemaQuery.data
     const resources = resourcesQuery.data ?? []
+    const canCreate = schema.actions.includes('create')
     const activeSelected = selected?.cloud === cloud && selected.service === service ? selected : undefined
     const runtimeReachable = cloudStatus?.runtime === 'reachable'
     const resourceCapabilities = withRuntimeState(normalizeCapabilities(schema.capabilities?.resourceActions), runtimeReachable)
@@ -167,7 +174,7 @@ export function DynamicResourceView({cloud, service, cloudStatus, statusLoading 
                                 </button>
                             </div>
                         </div>
-                        {createOpen && (
+                        {canCreate && createOpen && (
                             <div className="resource-create-inline">
                                 <DynamicFormRenderer
                                     schema={schema}
@@ -195,14 +202,9 @@ export function DynamicResourceView({cloud, service, cloudStatus, statusLoading 
                 </section>
                 <ResourceInspector resource={activeSelected} object={selectedObject}/>
             </div>
-            <StorageObjectBrowser
-                cloud={cloud}
-                resource={activeSelected}
-                capabilities={schema.capabilities?.objectActions}
-                runtimeReachable={runtimeReachable}
-                selectedObjectKey={selectedObject?.key}
-                onSelectObject={setSelectedObject}
-            />
+            {service === 'storage' && (
+                <StorageObjectBrowser cloud={cloud} resource={selected} selectedObjectKey={selectedObject?.key} onSelectObject={setSelectedObject}/>
+            )}
         </div>
     )
 }
