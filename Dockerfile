@@ -20,6 +20,8 @@ RUN apk add --no-cache ca-certificates libstdc++
 WORKDIR /app
 COPY --from=api-build /app/server ./server
 COPY --from=frontend-build /app/dist ./public
+# Drizzle migrator reads SQL + meta/_journal.json at runtime (not inside the compiled binary)
+COPY packages/api/drizzle ./drizzle
 ENV PORT=3000
 EXPOSE 3000
 CMD ["./server"]
