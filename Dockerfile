@@ -22,6 +22,8 @@ COPY --from=api-build /app/server ./server
 COPY --from=frontend-build /app/dist ./public
 # Drizzle migrator reads SQL + meta/_journal.json at runtime (not inside the compiled binary)
 COPY packages/api/drizzle ./drizzle
+# Avoid AWS SDK preferring a host-injected profile over AWS_ACCESS_KEY_ID in containers (Dokploy/K8s).
+ENV AWS_PROFILE=
 ENV PORT=3000
 EXPOSE 3000
 CMD ["./server"]
