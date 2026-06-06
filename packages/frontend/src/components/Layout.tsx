@@ -1,4 +1,4 @@
-import {NavLink, Outlet, useLocation} from 'react-router-dom'
+import {NavLink, Outlet, useLocation, useNavigate} from 'react-router-dom'
 import {
     AreaChart,
     Bell,
@@ -8,6 +8,7 @@ import {
     Boxes,
     LayoutDashboard,
     Lock,
+    LogOut,
     MessageSquare,
     Moon,
     Network,
@@ -27,6 +28,7 @@ import {fetchHealth, SERVICE_META} from '@/api/services'
 
 import type {ServiceName} from '@/api/types'
 import {useCloudWatchIngestor} from '@/features/cloudwatch/hooks/useCloudWatchIngestor'
+import {useAuth} from '@/auth/AuthContext'
 
 const ICONS: Record<ServiceName | 'dashboard', React.ElementType> = {
     dashboard: LayoutDashboard,
@@ -109,6 +111,8 @@ function CloudServiceNav() {
 
 export function Layout() {
     const location = useLocation()
+    const navigate = useNavigate()
+    const {logout} = useAuth()
     const activeCloud = activeCloudFromPath(location.pathname)
     const {theme, toggle} = useTheme()
     const {data, isError} = useQuery({
@@ -163,6 +167,17 @@ export function Layout() {
                     </div>
                     <button className="icon-btn" onClick={toggle} title="Toggle theme">
                         {theme === 'dark' ? <Sun size={14}/> : <Moon size={14}/>}
+                    </button>
+                    <button
+                        className="icon-btn"
+                        type="button"
+                        onClick={() => {
+                            logout()
+                            void navigate('/login', {replace: true})
+                        }}
+                        title="Sign out"
+                    >
+                        <LogOut size={14}/>
                     </button>
                     <div className={`connection ${isConnected ? 'connected' : 'disconnected'}`}>
                         <span className={`dot ${status}`}/>

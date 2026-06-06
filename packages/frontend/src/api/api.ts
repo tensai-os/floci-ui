@@ -1,3 +1,4 @@
+import { AUTH_TOKEN_STORAGE_KEY } from "@/auth/constants";
 import { EndpointRegistry, HttpClient } from "./HttpClient";
 
 export class AuthenticationRequiredError extends Error {
@@ -709,14 +710,33 @@ export function createApiClient(
     });
   }
 
-  //  client.addResponseInterceptor((res) => {
-  //    if (res.status === 401) {
-  //      handleUnauthorizedApiResponse();
-  //    }
-  //    return res;
-  //  });
+  client.addResponseInterceptor((res) => {
+    if (res.status === 401 && !res.url.includes("/api/auth/")) {
+      try {
+        localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+      } catch {
+        /* ignore */
+      }
+      if (
+        typeof window !== "undefined" &&
+        window.location.pathname !== "/login" &&
+        window.location.pathname !== "/setup"
+      ) {
+        window.location.assign("/login");
+      }
+    }
+    return res;
+  });
 
   return client;
 }
 
-export const apiClient = createApiClient();
+function getAccessToken(): string | null {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export const apiClient = createApiClient(() => getAccessToken());

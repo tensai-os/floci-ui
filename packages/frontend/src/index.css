@@ -3266,3 +3266,125 @@ tr:hover .bucket-action-btn {
     font-weight: 600;
     color: var(--text-bright);
 }
+
+/* ── Auth (login / setup) ─────────────────────────────────────────────────── */
+
+.auth-shell {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: var(--bg);
+}
+
+.auth-card {
+    width: 100%;
+    max-width: 400px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 28px 24px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+
+.auth-title {
+    margin: 0 0 8px;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-bright);
+}
+
+.auth-subtitle {
+    margin: 0 0 22px;
+    font-size: 13px;
+    color: var(--text-2);
+    line-height: 1.45;
+}
+
+.auth-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.auth-label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-2);
+}
+
+.auth-input {
+    font: inherit;
+    font-size: 14px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--input-border);
+    background: var(--input-bg);
+    color: var(--text);
+}
+
+.auth-input:focus {
+    outline: none;
+    border-color: var(--link);
+    box-shadow: 0 0 0 2px var(--link-tint);
+}
+
+.auth-error {
+    margin: 0;
+    font-size: 13px;
+    color: #f87171;
+}
+
+.auth-submit {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--accent-tint-border);
+    background: var(--accent-tint);
+    color: var(--accent);
+    cursor: pointer;
+}
+
+.auth-submit:hover:not(:disabled) {
+    background: var(--accent-tint-faint);
+    border-color: var(--accent);
+}
+
+.auth-submit:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.auth-footer {
+    margin: 18px 0 0;
+    font-size: 12px;
+    color: var(--text-3);
+}
+
+.auth-footer a {
+    color: var(--link);
+    text-decoration: none;
+}
+
+.auth-footer a:hover {
+    text-decoration: underline;
+}
+
+.auth-loading {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+}
+
+.auth-loading-inner {
+    font-size: 14px;
+    color: var(--text-2);
+}
